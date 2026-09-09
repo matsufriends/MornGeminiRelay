@@ -13,25 +13,10 @@ $('import').onclick = async () => {
   if (!tab?.url?.startsWith('https://gemini.google.com/')) return status('Gemini のタブで押してください');
   chrome.tabs.sendMessage(tab.id, { type: 'importAll' }, (r) => {
     if (chrome.runtime.lastError) return status('失敗: ' + chrome.runtime.lastError.message);
-    status(`${r.conversations} 会話を順に開いて取り込み中。終わるまでタブを触らない`);
+    status(`${r.conversations} 会話を順に開いて取り込み中 (1 会話ごとに .md を保存)。終わるまでタブを触らない`);
   });
 };
 
-$('download').onclick = () => chrome.storage.local.get({ history: [] }, ({ history }) => {
-  const byUrl = new Map();
-  for (const h of history) (byUrl.get(h.url) || byUrl.set(h.url, []).get(h.url)).push(h);
-  const day = new Date().toISOString().slice(0, 10);
-  for (const [url, hs] of byUrl) {
-    const title = hs.find((h) => h.title)?.title || url.split('/').pop();
-    let md = `# ${title}\n\n${url}\n\n`;
-    for (const h of hs) md += (h.ts ? `## ${new Date(h.ts).toLocaleString('ja-JP')}\n\n` : '') + h.text + '\n\n---\n\n';
-    const safe = title.replace(/[\\/:*?"<>|\n]+/g, ' ').trim().slice(0, 60);
-    chrome.downloads.download({
-      url: URL.createObjectURL(new Blob([md], { type: 'text/markdown' })),
-      filename: `gemini-history-${day}/${safe}.md`,
-    });
-  }
-  status(`${byUrl.size} ファイルをダウンロード`);
-});
+$('download').onclick = () => chrome.runtime.sendMessage({ type: 'downloadAll' }, (n) => status(`${n} ファイルをダウンロード`));
 
 $('clear').onclick = () => chrome.storage.local.set({ history: [] }, () => status('0 件'));
