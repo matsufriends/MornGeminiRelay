@@ -23,7 +23,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
         fetch(webhook, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: msg.text.slice(0, 2000) }),
+          body: JSON.stringify({ content: `**${msg.account || 'unknown'}**\n${msg.text}`.slice(0, 2000) }),
         }).catch((e) => console.error('webhook failed', e));
       }
     });

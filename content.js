@@ -1,10 +1,16 @@
 // Gemini の送信操作 (Enter / 送信ボタン) を捕まえ、入力欄のテキストを background へ渡す
 const SEND_BTN = 'button[aria-label*="送信"], button[aria-label*="Send" i]';
 
+// 右上アバターの aria-label「Google アカウント: 名前 (メール)」から取る
+function account() {
+  const label = document.querySelector('a[aria-label^="Google アカウント"], a[aria-label^="Google Account"]')?.getAttribute('aria-label') || '';
+  return label.split(/[:：]/).slice(1).join(':').replace(/\s+/g, ' ').replace(/,.*$/, '').trim();
+}
+
 function relay() {
   const text = document.querySelector('.ql-editor')?.innerText.trim();
   if (!text) return;
-  chrome.runtime.sendMessage({ type: 'prompt', text, url: location.href, ts: Date.now() });
+  chrome.runtime.sendMessage({ type: 'prompt', text, url: location.href, ts: Date.now(), account: account() });
 }
 
 document.addEventListener('keydown', (e) => {
