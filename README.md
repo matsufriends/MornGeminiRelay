@@ -10,7 +10,7 @@ Gemini (gemini.google.com) に投げた質問を Discord Webhook へ転送し、
 ## 動作
 
 - 送信 (Enter / 送信ボタン) の瞬間に入力欄 `.ql-editor` のテキストを取り、`chrome.storage.local` に保存 + Webhook へ POST
-- 「履歴を .md でダウンロード」で全件を Markdown 出力
+- 「会話ごとに .md でダウンロード」で `ダウンロード/gemini-history-<日付>/<会話タイトル>.md` に 1 会話 1 ファイルで出力
 
 ## 過去履歴の取り込み
 
