@@ -15,10 +15,12 @@ document.addEventListener('mousedown', (e) => {
   if (e.target.closest(SEND_BTN)) relay();
 }, true);
 
-// ---- 過去履歴の全取り込み: サイドバーの会話を順に開いて user-query を集める ----
+// ---- 過去履歴の全取り込み ----
+// サイドバーの会話 URL を queue に保存し、1 会話ずつフルロードで開いて user-query を集める。
+// SPA 内遷移だと前の会話 DOM が hidden で残り、サイドバーも消えるため、ページ遷移で毎回まっさらにする
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitFor(cond, timeout = 8000) {
+async function waitFor(cond, timeout = 10000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
     if (cond()) return true;
@@ -33,26 +35,43 @@ function scrapeQueries() {
   ).filter(Boolean);
 }
 
-async function importAll() {
-  const hrefs = [...document.querySelectorAll('[data-test-id="conversation"] a')].map((a) => a.href);
-  const items = [];
-  for (const href of hrefs) {
-    const a = [...document.querySelectorAll('[data-test-id="conversation"] a')].find((x) => x.href === href);
-    if (!a) continue;
-    const title = a.innerText.trim();
-    a.click();
-    await waitFor(() => location.href === href && document.querySelector('user-query'));
-    // ponytail: 長い会話は上方向へ数回スクロールして遅延描画分を読む。足りなければ回数を増やす
-    const sc = document.querySelector('infinite-scroller');
-    for (let i = 0; i < 5 && sc; i++) { sc.scrollTop = 0; await sleep(600); }
-    for (const text of scrapeQueries()) items.push({ ts: null, url: href, title, text });
+async function startImport() {
+  // サイドバーが閉じていると会話リンクが描画されないので開く
+  if (!document.querySelector('[data-test-id="conversation"] a')) {
+    [...document.querySelectorAll('button')]
+      .find((b) => /サイドバーを開く|open sidebar|メインメニュー|main menu/i.test(b.getAttribute('aria-label') || ''))?.click();
   }
-  chrome.runtime.sendMessage({ type: 'import', items });
-  return { conversations: hrefs.length, messages: items.length };
+  await waitFor(() => document.querySelector('[data-test-id="conversation"] a'));
+  const queue = [...document.querySelectorAll('[data-test-id="conversation"] a')]
+    .map((a) => ({ href: a.href, title: a.innerText.trim() }));
+  await chrome.storage.local.set({ importQueue: queue, importTotal: queue.length });
+  location.href = queue[0].href;
+  return { conversations: queue.length };
 }
+
+async function continueImport() {
+  const { importQueue = [] } = await chrome.storage.local.get('importQueue');
+  const cur = importQueue[0];
+  if (!cur || !location.href.startsWith(cur.href)) return;
+  await waitFor(() => document.querySelector('user-query'));
+  // 各ターンは少し遅れて描画されるので、件数が 2 秒変わらなくなるまで待つ
+  for (let n = -1, stable = 0; stable < 4; stable = document.querySelectorAll('user-query').length === n ? stable + 1 : 0) {
+    n = document.querySelectorAll('user-query').length;
+    await sleep(500);
+  }
+  // ponytail: 長い会話は上方向へ数回スクロールして遅延描画分を読む。足りなければ回数を増やす
+  const sc = document.querySelector('infinite-scroller');
+  for (let i = 0; i < 5 && sc; i++) { sc.scrollTop = 0; await sleep(600); }
+  const items = scrapeQueries().map((text) => ({ ts: null, url: cur.href, title: cur.title, text }));
+  chrome.runtime.sendMessage({ type: 'import', items });
+  const rest = importQueue.slice(1);
+  await chrome.storage.local.set({ importQueue: rest });
+  if (rest[0]) location.href = rest[0].href;
+}
+continueImport();
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg.type !== 'importAll') return;
-  importAll().then(sendResponse);
+  startImport().then(sendResponse);
   return true;
 });
