@@ -7,14 +7,22 @@ function account() {
   return label.split(/[:：]/).slice(1).join(':').replace(/\s+/g, ' ').replace(/,.*$/, '').trim();
 }
 
-function relay() {
-  const text = document.querySelector('.ql-editor')?.innerText.trim();
+// Enter は IME 確定でも飛ぶので、押下時のテキストを控えて「入力欄が空になった = Gemini が受理した」ときだけ送る
+async function relay() {
+  const editor = document.querySelector('.ql-editor');
+  const text = editor?.innerText.trim();
   if (!text) return;
-  chrome.runtime.sendMessage({ type: 'prompt', text, url: location.href, ts: Date.now(), account: account() });
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 150));
+    if (!editor.innerText.trim()) {
+      chrome.runtime.sendMessage({ type: 'prompt', text, url: location.href, ts: Date.now(), account: account() });
+      return;
+    }
+  }
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target.closest('.ql-editor')) relay();
+  if (e.key === 'Enter' && !e.shiftKey && e.target.closest('.ql-editor')) relay();
 }, true);
 
 document.addEventListener('mousedown', (e) => {
