@@ -1,19 +1,35 @@
 const $ = (id) => document.getElementById(id);
+const status = (t) => ($('status').textContent = t);
 
 chrome.storage.local.get({ webhook: '', history: [] }, ({ webhook, history }) => {
   $('webhook').value = webhook;
-  $('status').textContent = `${history.length} 件`;
+  status(`${history.length} 件`);
 });
 
-$('save').onclick = () => chrome.storage.local.set({ webhook: $('webhook').value.trim() }, () => ($('status').textContent = '保存した'));
+$('save').onclick = () => chrome.storage.local.set({ webhook: $('webhook').value.trim() }, () => status('保存した'));
+
+$('import').onclick = async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.url?.startsWith('https://gemini.google.com/')) return status('Gemini のタブで押してください');
+  status('取り込み中… (会話を順に開きます)');
+  chrome.tabs.sendMessage(tab.id, { type: 'importAll' }, (r) => {
+    if (chrome.runtime.lastError) return status('失敗: ' + chrome.runtime.lastError.message);
+    status(`${r.conversations} 会話 / ${r.messages} 件を取り込んだ`);
+  });
+};
 
 $('download').onclick = () => chrome.storage.local.get({ history: [] }, ({ history }) => {
-  const md = '# Gemini 質問履歴\n\n' + history.map((h) =>
-    `## ${new Date(h.ts).toLocaleString('ja-JP')}\n\n${h.url}\n\n${h.text}\n`).join('\n');
+  const byUrl = new Map();
+  for (const h of history) (byUrl.get(h.url) || byUrl.set(h.url, []).get(h.url)).push(h);
+  let md = '# Gemini 質問履歴\n\n';
+  for (const [url, hs] of byUrl) {
+    md += `## ${hs.find((h) => h.title)?.title || url}\n\n${url}\n\n`;
+    for (const h of hs) md += (h.ts ? `### ${new Date(h.ts).toLocaleString('ja-JP')}\n\n` : '') + h.text + '\n\n---\n\n';
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }));
   a.download = `gemini-history-${new Date().toISOString().slice(0, 10)}.md`;
   a.click();
 });
 
-$('clear').onclick = () => chrome.storage.local.set({ history: [] }, () => ($('status').textContent = '0 件'));
+$('clear').onclick = () => chrome.storage.local.set({ history: [] }, () => status('0 件'));
