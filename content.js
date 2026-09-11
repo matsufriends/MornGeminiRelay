@@ -15,7 +15,7 @@ async function relay() {
   for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, 150));
     if (!editor.innerText.trim()) {
-      chrome.runtime.sendMessage({ type: 'prompt', text, url: location.href, ts: Date.now(), account: account() });
+      request({ type: 'prompt', text, account: account() }).catch(console.error);
       return;
     }
   }
@@ -29,63 +29,83 @@ document.addEventListener('mousedown', (e) => {
   if (e.target.closest(SEND_BTN)) relay();
 }, true);
 
-// ---- 過去履歴の全取り込み ----
-// サイドバーの会話 URL を queue に保存し、1 会話ずつフルロードで開いて user-query を集める。
-// SPA 内遷移だと前の会話 DOM が hidden で残り、サイドバーも消えるため、ページ遷移で毎回まっさらにする
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// ---- Gemini を開いて直接 Markdown に保存 ----
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function waitFor(cond, timeout = 10000) {
-  const end = Date.now() + timeout;
+async function request(message) {
+  const response = await chrome.runtime.sendMessage(message);
+  if (response?.error) throw new Error(response.error);
+  return response;
+}
+
+const visible = (element) => element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden';
+const LOADING = '[aria-busy="true"], [role="progressbar"], mat-progress-spinner';
+const loading = (root) => (root.matches?.(LOADING) && visible(root)) || [...root.querySelectorAll(LOADING)].some(visible);
+
+async function waitFor(condition, message) {
+  const end = Date.now() + 15000;
   while (Date.now() < end) {
-    if (cond()) return true;
-    await sleep(200);
+    if (condition()) return;
+    await sleep(100);
   }
-  return false;
+  throw new Error(message);
+}
+
+// ponytail: DOM の静止 800ms を読み込み完了の目安にする。明示的な完了表示が得られたら置き換える。
+async function settle(read, advance, root) {
+  let previous = read(), changed = Date.now();
+  const end = Date.now() + 60000;
+  while (Date.now() < end) {
+    advance();
+    await sleep(100);
+    const current = read();
+    if (current !== previous || loading(root)) { previous = current; changed = Date.now(); }
+    if (Date.now() - changed >= 800) return;
+  }
+  throw new Error('読み込みが完了しませんでした。保存を停止しました');
 }
 
 function scrapeQueries() {
-  return [...document.querySelectorAll('user-query .query-text')].map((q) =>
-    [...q.querySelectorAll('.query-text-line')].map((p) => p.innerText).join('\n').trim()
-  ).filter(Boolean);
+  return [...document.querySelectorAll('user-query .query-text')].filter(visible).map((query) => {
+    const lines = [...query.querySelectorAll('.query-text-line')];
+    return (lines.length ? lines.map((line) => line.innerText).join('\n') : query.innerText).trim();
+  }).filter(Boolean);
 }
 
-async function startImport() {
-  // サイドバーが閉じていると会話リンクが描画されないので開く
-  if (!document.querySelector('[data-test-id="conversation"] a')) {
-    [...document.querySelectorAll('button')]
-      .find((b) => /サイドバーを開く|open sidebar|メインメニュー|main menu/i.test(b.getAttribute('aria-label') || ''))?.click();
+async function collectConversations() {
+  const selector = '[data-test-id="conversation"] a';
+  const toggle = [...document.querySelectorAll('button')].find((button) => /サイドバーを開く|open sidebar|メインメニュー|main menu/i.test(button.getAttribute('aria-label') || ''));
+  toggle?.click();
+  await waitFor(() => document.querySelector(selector), '会話が見つかりません。Gemini のログイン状態と会話一覧を確認してください');
+  const first = document.querySelector(selector);
+  let scroller = first.parentElement;
+  while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+  const conversations = new Map();
+  await settle(() => {
+    for (const link of document.querySelectorAll(selector)) conversations.set(link.href, { href: link.href, title: link.innerText.trim() });
+    return [...conversations.keys()].join('\n');
+  }, () => { if (scroller) scroller.scrollTop = scroller.scrollHeight; }, scroller || document);
+  return [...conversations.values()];
+}
+
+async function exportCurrentPage() {
+  const job = await request({ type: 'getExportJob' });
+  if (!job || job.done || job.error) return;
+  let response;
+  if (job.queue === null) {
+    response = await request({ type: 'exportQueue', queue: await collectConversations() });
+  } else {
+    if (new URL(job.queue[0].href).pathname !== location.pathname) throw new Error('保存中にページが変わりました。もう一度開始してください');
+    await waitFor(() => scrapeQueries().length, '質問本文が見つからないため保存を停止しました');
+    const scroller = document.querySelector('infinite-scroller');
+    await settle(() => JSON.stringify(scrapeQueries()), () => { if (scroller) scroller.scrollTop = 0; }, scroller || document);
+    response = await request({ type: 'exportConversation', texts: scrapeQueries() });
   }
-  await waitFor(() => document.querySelector('[data-test-id="conversation"] a'));
-  const queue = [...document.querySelectorAll('[data-test-id="conversation"] a')]
-    .map((a) => ({ href: a.href, title: a.innerText.trim() }));
-  await chrome.storage.local.set({ importQueue: queue, importTotal: queue.length });
-  location.href = queue[0].href;
-  return { conversations: queue.length };
+  // フルロードで前の会話の非表示 DOM を残さず、作業専用タブだけを進める。
+  if (response.next) location.href = response.next;
 }
 
-async function continueImport() {
-  const { importQueue = [] } = await chrome.storage.local.get('importQueue');
-  const cur = importQueue[0];
-  if (!cur || !location.href.startsWith(cur.href)) return;
-  await waitFor(() => document.querySelector('user-query'));
-  // 各ターンは少し遅れて描画されるので、件数が 2 秒変わらなくなるまで待つ
-  for (let n = -1, stable = 0; stable < 4; stable = document.querySelectorAll('user-query').length === n ? stable + 1 : 0) {
-    n = document.querySelectorAll('user-query').length;
-    await sleep(500);
-  }
-  // ponytail: 長い会話は上方向へ数回スクロールして遅延描画分を読む。足りなければ回数を増やす
-  const sc = document.querySelector('infinite-scroller');
-  for (let i = 0; i < 5 && sc; i++) { sc.scrollTop = 0; await sleep(600); }
-  const items = scrapeQueries().map((text) => ({ ts: null, url: cur.href, title: cur.title, text }));
-  chrome.runtime.sendMessage({ type: 'import', items });
-  const rest = importQueue.slice(1);
-  await chrome.storage.local.set({ importQueue: rest });
-  if (rest[0]) location.href = rest[0].href;
-}
-continueImport();
-
-chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-  if (msg.type !== 'importAll') return;
-  startImport().then(sendResponse);
-  return true;
+exportCurrentPage().catch(async (error) => {
+  console.error(error);
+  await request({ type: 'exportError', error: error.message }).catch(console.error);
 });

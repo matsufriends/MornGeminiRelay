@@ -8,8 +8,8 @@
   .webhook-row { display: flex; gap: var(--gap); }
   input, button { font: inherit; padding: var(--panel); }
   input { flex: 1; min-width: 0; }
-  button { cursor: pointer; }
-  #import { width: 100%; margin-top: var(--section); }
+  button:enabled { cursor: pointer; }
+  #export { width: 100%; margin-top: var(--section); }
   #status { margin-top: var(--gap); overflow-wrap: anywhere; }
   @media (hover: hover) { button:enabled:hover { filter: brightness(0.9); } }
 </style>
@@ -18,7 +18,7 @@
   <input id="webhook" type="url" placeholder="https://discord.com/api/webhooks/...">
   <button id="save">保存</button>
 </div>
-<button id="import">履歴の取り込み &amp; 保存</button>
+<button id="export">Gemini を開いて履歴を保存</button>
 <div id="status" role="status"></div>
 <script src="popup.js"></script>
 </html>
