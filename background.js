@@ -13,7 +13,7 @@ function downloadConversation(url, hs) {
   });
 }
 
-chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'prompt') {
     chrome.storage.local.get({ history: [], webhook: '' }, ({ history, webhook }) => {
       history.push({ ts: msg.ts, url: msg.url, title: '', text: msg.text });
@@ -36,14 +36,5 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
       chrome.storage.local.set({ history });
       if (msg.items[0]) downloadConversation(msg.items[0].url, msg.items);
     });
-  }
-  if (msg.type === 'downloadAll') {
-    chrome.storage.local.get({ history: [] }, ({ history }) => {
-      const byUrl = new Map();
-      for (const h of history) (byUrl.get(h.url) || byUrl.set(h.url, []).get(h.url)).push(h);
-      for (const [url, hs] of byUrl) downloadConversation(url, hs);
-      sendResponse(byUrl.size);
-    });
-    return true;
   }
 });

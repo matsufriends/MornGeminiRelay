@@ -16,7 +16,3 @@ $('import').onclick = async () => {
     status(`${r.conversations} 会話を順に開いて取り込み中 (1 会話ごとに .md を保存)。終わるまでタブを触らない`);
   });
 };
-
-$('download').onclick = () => chrome.runtime.sendMessage({ type: 'downloadAll' }, (n) => status(`${n} ファイルをダウンロード`));
-
-$('clear').onclick = () => chrome.storage.local.set({ history: [] }, () => status('0 件'));
