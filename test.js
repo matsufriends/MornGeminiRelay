@@ -170,46 +170,51 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const posted = [];
   const injected = '<script data-bard-client-injected="true">(function(){ window.__initial_auth_token = "secret"; })()</script>\n'
     + '<script ws-interception-config="{&quot;parentOrigin&quot;:&quot;https://gemini.google.com&quot;}" data-bard-client-injected="true">document.querySelectorAll("[data-bard-client-injected]")</script>\n';
-  let previewUrl;
-  const preview = (protocol, html, window = {}) => {
-    previewUrl = { createObjectURL: (blob) => 'blob:' + blob.size };
+  // 読み込み役 (https:) と遷移後の blob: フレームは同じオリジンなので sessionStorage を共有する
+  let previewStorage = {};
+  const preview = (protocol, { dom = '<html></html>', title = 'x', window = {} } = {}) => {
+    class NativeBlob { constructor(parts) { this.parts = parts; } }
     vm.runInNewContext(fs.readFileSync('preview.js', 'utf8'), {
-      window,
-      location: { protocol, href: 'blob:https://x.scf.usercontent.goog/1' },
-      URL: previewUrl,
-      fetch: async () => ({ text: async () => html }),
+      window, Blob: NativeBlob, TextDecoder,
+      sessionStorage: { getItem: (key) => previewStorage[key] ?? null, setItem: (key, value) => { previewStorage[key] = value; } },
+      location: { protocol },
+      document: { title, documentElement: { outerHTML: dom } },
       addEventListener: (type, fn) => { previewListener = fn; },
     });
+    return window;
   };
   const ask = async (origin) => {
     await previewListener({ origin, data: { type: 'morn-gemini-relay:get-canvas', id: 'req' }, source: { postMessage: (msg) => posted.push(msg) } });
   };
-  const page = '<!DOCTYPE html><html><head>' + injected + '<title>x</title></head></html>';
-  const stripped = [{ type: 'morn-gemini-relay:canvas', id: 'req', html: '<!DOCTYPE html><html><head><title>x</title></head></html>', error: '' }];
-  preview('blob:', page);
+  const page = '<!DOCTYPE html><html><head>' + injected + '<title>x</title></head><body><canvas></canvas></body></html>';
+  const clean = '<!DOCTYPE html><html><head><title>x</title></head><body><canvas></canvas></body></html>';
+  const loader = preview('https:');
+  await ask('https://gemini.google.com');
+  assert.equal(posted.length, 0, 'HTML を持たない読み込み役のフレームは答えない');
+  const blob = new loader.Blob([new TextEncoder().encode(page)], { type: 'text/html' });
+  assert.equal(blob.parts.length, 1, 'Blob の作成は本来どおり行う');
+  new loader.Blob(['console.log(1)']);
+  preview('blob:', { dom: '<html><head><title>x</title></head><body>描画後</body></html>' });
   await ask('https://evil.example');
   assert.equal(posted.length, 0, 'Gemini 以外からの問い合わせには答えない');
   await ask('https://gemini.google.com');
-  assert.deepEqual(copy(posted), stripped, 'blob: フレームは自分を読み直し、認証トークン入りの差し込みを除いた HTML を返す');
+  assert.deepEqual(copy(posted), [{ type: 'morn-gemini-relay:canvas', id: 'req', html: clean, error: '', source: 'blob' }], '遷移前に Blob にされた元の HTML を、差し込みを除いて返す (HTML 以外の Blob では上書きしない)');
   posted.length = 0;
-  preview('https:', '');
+  preview('blob:', { title: '別の Canvas', dom: '<html>' + injected + '<body>描画後</body></html>' });
   await ask('https://gemini.google.com');
-  assert.equal(posted.length, 0, 'HTML を持たない scf フレームは答えない');
-  assert.equal(previewUrl.createObjectURL({ size: 3, text: async () => page }), 'blob:3', 'blob の作成は本来どおり行う');
-  previewUrl.createObjectURL({ size: 1, text: async () => 'console.log(1)' });
-  await ask('https://gemini.google.com');
-  assert.deepEqual(copy(posted), stripped, 'scf フレームは blob にした HTML を控えて返し、HTML 以外の blob では上書きしない');
+  assert.deepEqual(copy(posted), [{ type: 'morn-gemini-relay:canvas', id: 'req', html: '<!DOCTYPE html>\n<html><body>描画後</body></html>', error: '', source: 'dom' }], 'タイトルの合わない控えは使わず、表示中の DOM で代用する');
   posted.length = 0;
-  preview('blob:', '<html><head><script data-bard-client-injected="true">window.__initial_auth_token = "secret";');
+  previewStorage = {};
+  preview('blob:', { dom: '<html><head><script data-bard-client-injected="true">window.__initial_auth_token = "secret";' });
   await ask('https://gemini.google.com');
-  assert.deepEqual(copy(posted[0]), { type: 'morn-gemini-relay:canvas', id: 'req', html: '', error: '差し込みスクリプトを除去できませんでした' }, '差し込みを取り切れない HTML は渡さず、理由を返す');
+  assert.deepEqual(copy(posted[0]), { type: 'morn-gemini-relay:canvas', id: 'req', html: '', error: '差し込みスクリプトを除去できませんでした', source: 'dom' }, '差し込みを取り切れない HTML は渡さず、理由を返す');
   posted.length = 0;
   const token = 'ya29.token-value-123';
-  preview('blob:', '<html><body data-note="' + token + '">', { __initial_auth_token: token, __firebase_config: '{"apiKey":"AIzaKEY12345"}' });
+  preview('blob:', { dom: '<html><body data-note="' + token + '">', window: { __initial_auth_token: token, __firebase_config: '{"apiKey":"AIzaKEY12345"}' } });
   await ask('https://gemini.google.com');
   assert.equal(posted[0].error, '認証情報が残っていたため送りませんでした', 'トークンの値が残っていれば渡さない');
   posted.length = 0;
-  preview('blob:', page.replace('<title>', '<title>data-bard-client-injected を説明する '), { __initial_auth_token: token });
+  preview('blob:', { dom: page.replace('<title>', '<title>data-bard-client-injected を説明する '), window: { __initial_auth_token: token } });
   await ask('https://gemini.google.com');
   assert.equal(posted[0].error, '', '目印の文字列が本文に残るだけなら送る');
   document.querySelectorAll = (selector) => selector === 'model-response' ? [{ querySelector: () => el('MESSAGE-CONTENT', {}, t(now < 1000 ? '途中' : '回答')) }] : [];
