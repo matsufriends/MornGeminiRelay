@@ -8,7 +8,8 @@
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     { "matches": ["https://gemini.google.com/*"], "js": ["content.js"] },
-    { "matches": ["https://gemini.google.com/*"], "js": ["canvas.js"], "world": "MAIN" }
+    { "matches": ["https://gemini.google.com/*"], "js": ["canvas.js"], "world": "MAIN" },
+    { "matches": ["https://*.scf.usercontent.goog/*"], "js": ["preview.js"], "all_frames": true, "match_origin_as_fallback": true, "run_at": "document_start" }
   ],
   "action": { "default_popup": "popup.html" }
 }

@@ -145,7 +145,9 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   context.chrome.runtime.sendMessage = async (msg) => { relayed.push(msg); return {}; };
   const el = (tagName, props, ...childNodes) => {
     const node = { nodeType: 1, tagName, childNodes, children: childNodes.filter((child) => child.nodeType === 1), className: '', getAttribute: (name) => props?.[name] ?? null, ...props };
-    node.querySelector = (selector) => node.children.map((child) => selector === child.tagName.toLowerCase() || selector === '.' + child.className ? child : child.querySelector(selector)).find(Boolean) || null;
+    const matches = (child, selector) => selector === child.tagName.toLowerCase() || selector === '.' + child.className;
+    node.querySelector = (selector) => node.children.map((child) => matches(child, selector) ? child : child.querySelector(selector)).find(Boolean) || null;
+    node.querySelectorAll = (selector) => node.children.flatMap((child) => [...(matches(child, selector) ? [child] : []), ...child.querySelectorAll(selector)]);
     node.textContent = node.innerText ??= childNodes.map((child) => child.textContent).join('');
     return node;
   };
@@ -156,7 +158,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
       el('LI', {}, el('P', {}, el('STRONG', {}, t('操作性')), t(':')), el('UL', {}, el('LI', {}, t('マウス '), el('CODE', {}, t('A/D'))))),
       el('LI', {}, el('P', {}, t('見た目')))),
     el('CODE-BLOCK', {}, el('DIV', { className: 'code-block-decoration' }, t('HTML'), el('BUTTON', {}, t('コピー'))), el('PRE', {}, el('CODE', { className: 'language-html', innerText: '<p>\n  x\n</p>\n' }))),
-    el('IMMERSIVE-ENTRY-CHIP', {}, t('Neon Breakout Game コード プレビュー'), el('XAP-CODE-EDITOR', { dataset: { mornCode: '<!DOCTYPE html>\n<html></html>', mornLang: 'html' } }, t('見えている行だけ'))),
+    el('IMMERSIVE-ENTRY-CHIP', { dataset: { mornCode: '<!DOCTYPE html>\n<html></html>', mornLang: 'html' } }, t('Neon Breakout Game コード プレビュー'), el('XAP-CODE-EDITOR', {}, t('見えている行だけ'))),
     el('P', {}, t('以上')));
   assert.deepEqual(copy(vm.runInContext('toMrkdwn', context)(answer)), {
     text: '\u200B*主な仕様*\u200B\n\n1. \u200B*操作性*\u200B:\n    ◦ マウス `A/D`\n2. 見た目\n\n📎 code-1.html\n\n📎 code-2.html\n\n以上',
@@ -170,6 +172,30 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   });
   canvasListener();
   assert.deepEqual(host.dataset, { mornCode: '全 900 行', mornLang: 'html' }, 'Canvas のコードは描画範囲ではなく Monaco のモデルから全文を取る');
+  let previewListener;
+  const posted = [];
+  const injected = '<script data-bard-client-injected="true">(function(){ window.__initial_auth_token = "secret"; })()</script>\n';
+  const preview = (protocol, html) => vm.runInNewContext(fs.readFileSync('preview.js', 'utf8'), {
+    location: { protocol, href: 'blob:https://x.scf.usercontent.goog/1' },
+    fetch: async () => ({ text: async () => html }),
+    addEventListener: (type, fn) => { previewListener = fn; },
+    document: { documentElement: { outerHTML: '<html></html>' } },
+  });
+  const ask = async (origin) => {
+    await previewListener({ origin, data: { type: 'morn-gemini-relay:get-canvas' }, source: { postMessage: (msg) => posted.push(msg) } });
+  };
+  preview('blob:', '<!DOCTYPE html><html><head>' + injected + '<title>x</title></head></html>');
+  await ask('https://evil.example');
+  assert.equal(posted.length, 0, 'Gemini 以外からの問い合わせには答えない');
+  await ask('https://gemini.google.com');
+  assert.deepEqual(copy(posted), [{ type: 'morn-gemini-relay:canvas', html: '<!DOCTYPE html><html><head><title>x</title></head></html>' }], 'プレビューの blob から認証トークン入りの差し込みを除いた HTML を返す');
+  posted.length = 0;
+  preview('blob:', '<html><head><script data-bard-client-injected="true">window.__initial_auth_token = "secret";');
+  await ask('https://gemini.google.com');
+  assert.equal(posted[0].html, '', '差し込みを取り切れない HTML は渡さない');
+  previewListener = undefined;
+  preview('https:', '');
+  assert.equal(previewListener, undefined, 'blob: 以外のフレームでは何もしない');
   document.querySelectorAll = (selector) => selector === 'model-response' ? [{ querySelector: () => el('MESSAGE-CONTENT', {}, t(now < 1000 ? '途中' : '回答')) }] : [];
   document.querySelector = () => stopping ? {} : null;
   now = 0;
@@ -177,5 +203,5 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('relayAnswer("abc", 0)', context);
   assert.deepEqual(copy(relayed), [{ type: 'answer', conversation: 'abc', text: '回答', files: [] }], '生成完了後の回答を 1 回だけ転送する');
   assert.ok(now >= 3200, '停止ボタンが消えてから 1.5 秒待つ');
-  console.log('PASS: Slack スレッド転送・コード投稿・Canvas 全文取得・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  console.log('PASS: Slack スレッド転送・コード投稿・Canvas 全文取得 (コード/プレビュー)・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

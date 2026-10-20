@@ -44,10 +44,7 @@ function toMrkdwn(root) {
     if (node.nodeType !== 1 || /^(BUTTON|MAT-ICON|SVG|STYLE|SCRIPT|XAP-CODE-EDITOR)$/.test(node.tagName)) return '';
     const inner = () => [...node.childNodes].map((child) => walk(child, depth)).join('');
     switch (node.tagName) {
-      case 'IMMERSIVE-ENTRY-CHIP': {
-        const editor = node.querySelector('xap-code-editor');
-        return editor?.dataset.mornCode ? addFile(editor.dataset.mornCode, editor.dataset.mornLang || '') : inner();
-      }
+      case 'IMMERSIVE-ENTRY-CHIP': return node.dataset.mornCode ? addFile(node.dataset.mornCode, node.dataset.mornLang || '') : inner();
       case 'CODE-BLOCK':
       case 'PRE': {
         const code = node.querySelector('code') || node;
@@ -81,6 +78,19 @@ function toMrkdwn(root) {
   return { text, files };
 }
 
+// プレビュー表示中の Canvas は、iframe 内の blob: フレームで動く preview.js に HTML を問い合わせる
+function canvasHtml(iframe) {
+  return new Promise((resolve) => {
+    const frames = iframe.contentWindow;
+    const targets = Array.from({ length: frames?.length || 0 }, (_, i) => frames[i]);
+    const done = (html) => { removeEventListener('message', onMessage); clearTimeout(timer); resolve(html); };
+    const onMessage = (event) => { if (targets.includes(event.source) && event.data?.type === 'morn-gemini-relay:canvas') done(event.data.html); };
+    addEventListener('message', onMessage);
+    const timer = setTimeout(() => done(''), 3000);
+    for (const target of targets) target.postMessage({ type: 'morn-gemini-relay:get-canvas' }, '*');
+  });
+}
+
 // 新しい回答が現れ、停止ボタンが消えて本文が 1.5 秒変わらなくなったら完了とみなす
 async function relayAnswer(conversation, before) {
   await waitFor(() => document.querySelectorAll('model-response').length > before, '回答が見つかりません');
@@ -89,8 +99,14 @@ async function relayAnswer(conversation, before) {
     const current = lastResponse()?.innerText.trim() || '';
     if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
     if (current && Date.now() - changed >= 1500) {
-      document.dispatchEvent(new CustomEvent('morn-gemini-relay:canvas')); // canvas.js が同期でコード全文を書き出す
-      return request({ type: 'answer', conversation, ...toMrkdwn(lastResponse()) });
+      const root = lastResponse();
+      document.dispatchEvent(new CustomEvent('morn-gemini-relay:canvas')); // コード表示中なら canvas.js が同期で全文を書き出す
+      for (const chip of root.querySelectorAll('immersive-entry-chip')) {
+        const iframe = chip.querySelector('iframe');
+        const html = !chip.dataset.mornCode && iframe && await canvasHtml(iframe);
+        if (html) Object.assign(chip.dataset, { mornCode: html, mornLang: 'html' });
+      }
+      return request({ type: 'answer', conversation, ...toMrkdwn(root) });
     }
   }
   throw new Error('回答の生成が完了しませんでした');
