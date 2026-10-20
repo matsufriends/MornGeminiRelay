@@ -174,7 +174,8 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.deepEqual(host.dataset, { mornCode: '全 900 行', mornLang: 'html' }, 'Canvas のコードは描画範囲ではなく Monaco のモデルから全文を取る');
   let previewListener;
   const posted = [];
-  const injected = '<script data-bard-client-injected="true">(function(){ window.__initial_auth_token = "secret"; })()</script>\n';
+  const injected = '<script data-bard-client-injected="true">(function(){ window.__initial_auth_token = "secret"; })()</script>\n'
+    + '<script ws-interception-config="{&quot;parentOrigin&quot;:&quot;https://gemini.google.com&quot;}" data-bard-client-injected="true">document.querySelectorAll("[data-bard-client-injected]")</script>\n';
   let previewUrl;
   const preview = (protocol, html) => {
     previewUrl = { createObjectURL: (blob) => 'blob:' + blob.size };

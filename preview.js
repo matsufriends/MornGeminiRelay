@@ -3,7 +3,8 @@
 // blob: フレームに入れた場合は自分自身を読み直す。Gemini 側の content.js から問い合わせがあれば控えた HTML を返す。
 // Gemini が先頭に差し込む認証トークン入りの <script data-bard-client-injected> は取り除き、取り切れなければ渡さない。
 const stripInjected = (html) => {
-  html = html.replace(/<script data-bard-client-injected[^>]*>[\s\S]*?<\/script>\s*/g, '');
+  // 属性が先頭とは限らない (例: <script ws-interception-config="…" data-bard-client-injected="true">)
+  html = html.replace(/<script\b[^>]*\bdata-bard-client-injected\b[^>]*>[\s\S]*?<\/script>\s*/g, '');
   return html.includes('data-bard-client-injected') ? '' : html;
 };
 const isHtml = (text) => /<html|<!doctype html/i.test(text);
