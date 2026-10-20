@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "MornGeminiRelay",
-  "version": "0.1.0",
-  "description": "Gemini への質問を Discord Webhook へ転送し、履歴を Markdown で保存する",
+  "version": "0.2.0",
+  "description": "Gemini の質問と回答を Slack のスレッドへ転送し、履歴を Markdown で保存する",
   "permissions": ["storage", "tabs", "downloads"],
-  "host_permissions": ["https://discord.com/api/webhooks/*", "https://discordapp.com/api/webhooks/*"],
+  "host_permissions": ["https://slack.com/api/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [{ "matches": ["https://gemini.google.com/*"], "js": ["content.js"] }],
   "action": { "default_popup": "popup.html" }

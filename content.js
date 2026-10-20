@@ -7,26 +7,57 @@ function account() {
   return label.split(/[:：]/).slice(1).join(':').replace(/\s+/g, ' ').replace(/,.*$/, '').trim();
 }
 
+// 新規チャットは送信後に URL が /app/<id> へ変わるので、それを待って会話 ID (= Slack スレッドの単位) にする
+async function conversationId() {
+  for (let i = 0; i < 100; i++) {
+    const id = location.pathname.match(/\/app\/([^/]+)$/)?.[1];
+    if (id) return id;
+    await sleep(100);
+  }
+  throw new Error('会話 ID を取得できませんでした');
+}
+
+const STOP_BTN = 'button[aria-label*="停止"], button[aria-label*="Stop" i]';
+const lastAnswer = () => {
+  const responses = document.querySelectorAll('model-response');
+  const last = responses[responses.length - 1];
+  return (last?.querySelector('message-content') || last)?.innerText.trim() || '';
+};
+
+// 新しい回答が現れ、停止ボタンが消えて本文が 1.5 秒変わらなくなったら完了とみなす
+async function relayAnswer(conversation, before) {
+  await waitFor(() => document.querySelectorAll('model-response').length > before, '回答が見つかりません');
+  let previous = '', changed = Date.now();
+  for (const end = Date.now() + 600000; Date.now() < end; await sleep(300)) {
+    const current = lastAnswer();
+    if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
+    if (current && Date.now() - changed >= 1500) return request({ type: 'answer', conversation, text: current });
+  }
+  throw new Error('回答の生成が完了しませんでした');
+}
+
 // Enter は IME 確定でも飛ぶので、押下時のテキストを控えて「入力欄が空になった = Gemini が受理した」ときだけ送る
 async function relay() {
   const editor = document.querySelector('.ql-editor');
   const text = editor?.innerText.trim();
   if (!text) return;
+  const before = document.querySelectorAll('model-response').length;
   for (let i = 0; i < 10; i++) {
-    await new Promise((r) => setTimeout(r, 150));
+    await sleep(150);
     if (!editor.innerText.trim()) {
-      request({ type: 'prompt', text, account: account() }).catch(console.error);
-      return;
+      const conversation = await conversationId();
+      await request({ type: 'prompt', conversation, text, account: account() });
+      return relayAnswer(conversation, before);
     }
   }
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && e.target.closest('.ql-editor')) relay();
+  if (e.key === 'Enter' && !e.shiftKey && e.target.closest('.ql-editor')) relay().catch(console.error);
 }, true);
 
 document.addEventListener('mousedown', (e) => {
-  if (e.target.closest(SEND_BTN)) relay();
+  if (e.target.closest(SEND_BTN)) relay().catch(console.error);
 }, true);
 
 // ---- Gemini を開いて直接 Markdown に保存 ----

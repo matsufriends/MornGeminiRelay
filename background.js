@@ -1,5 +1,28 @@
-// 設定だけを永続保存する。旧版が蓄積した質問履歴と取り込み情報は削除する。
-chrome.storage.local.remove(['history', 'importQueue', 'importTotal']);
+// 設定と会話 ID → Slack スレッドの対応だけを永続保存する。旧版の履歴・取り込み情報・Discord 設定は削除する。
+chrome.storage.local.remove(['history', 'importQueue', 'importTotal', 'webhook']);
+
+const escapeSlack = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+let slackQueue = Promise.resolve();
+
+// 会話の最初の投稿を親にし、以降の質問と回答はその ts をスレッドにして返信する。
+// 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
+function postToSlack(conversation, text) {
+  const post = slackQueue.then(async () => {
+    const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
+    if (!slackToken || !slackChannel) return;
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${slackToken}` },
+      body: JSON.stringify({ channel: slackChannel, thread_ts: threads[conversation], text: text.slice(0, 39000) }),
+    });
+    const result = await response.json();
+    if (!result.ok) throw new Error(`Slack: ${result.error}`);
+    // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
+    if (!threads[conversation]) await chrome.storage.local.set({ threads: { ...threads, [conversation]: result.ts } });
+  });
+  slackQueue = post.catch(() => {});
+  return post;
+}
 
 async function downloadConversation(conversation, texts) {
   const title = conversation.title || new URL(conversation.href).pathname.split('/').pop();
@@ -20,16 +43,10 @@ async function downloadConversation(conversation, texts) {
 }
 
 async function handleMessage(msg, sender) {
-  if (msg.type === 'prompt') {
-    const { webhook } = await chrome.storage.local.get('webhook');
-    if (webhook) {
-      const response = await fetch(webhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: `**${msg.account || 'unknown'}**\n${msg.text}`.slice(0, 2000) }),
-      });
-      if (!response.ok) throw new Error(`Discord: HTTP ${response.status}`);
-    }
+  if (msg.type === 'prompt' || msg.type === 'answer') {
+    if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof msg.text !== 'string') throw new Error('不正な転送内容です');
+    const author = msg.type === 'prompt' ? msg.account || 'unknown' : 'Gemini';
+    await postToSlack(msg.conversation, `*${escapeSlack(author)}*\n${escapeSlack(msg.text)}`);
     return {};
   }
 

@@ -1,11 +1,15 @@
 # MornGeminiRelay
 
-Gemini (gemini.google.com) に投げた質問を Discord Webhook へ転送し、質問履歴を Markdown でダウンロードする Chrome 拡張。
+Gemini (gemini.google.com) に投げた質問と回答を Slack のスレッドへ転送し、質問履歴を Markdown でダウンロードする Chrome 拡張。
 
 ## インストール
 
 1. `chrome://extensions` → デベロッパーモード ON → 「パッケージ化されていない拡張機能を読み込む」でこのディレクトリを選ぶ
-2. Discord に転送する場合は、拡張機能から Webhook URL を入力し、右の「保存」を押す
+2. Slack に転送する場合は Slack App を作り、以下を設定する
+   - Bot Token Scopes に `chat:write` を追加してワークスペースにインストールし、Bot User OAuth Token (`xoxb-…`) を控える
+   - 投稿先チャンネルで `/invite @<App 名>` を実行する (招待せずに公開チャンネルへ投稿するなら `chat:write.public` も追加)
+   - チャンネル詳細の最下部にあるチャンネル ID (`C…`) を控える
+3. 拡張機能に Bot Token とチャンネル ID を入力し、「保存」を押す
 
 ## 質問履歴を保存
 
@@ -19,11 +23,13 @@ Gemini (gemini.google.com) に投げた質問を Discord Webhook へ転送し、
 
 Gemini の画面に読み込める会話が対象。DOM の更新停止を 800ms 待って進むため、Gemini 側の表示変更や、読み込み中表示を伴わない遅い応答では完全性を保証できない。取得速度も Gemini の読み込み時間に依存する。
 
-## Discord 転送とデータ保存
+## Slack 転送とデータ保存
 
-送信操作後に Gemini の入力欄が空になったら、質問を Google アカウント名・メールとともに Discord へ転送する (最大 2000 文字)。履歴の一括保存では Discord に送信しない。
+送信操作後に Gemini の入力欄が空になったら、質問を Google アカウント名・メールとともに Slack へ転送する。新しい会話の最初の質問が親投稿になり、その会話の Gemini の回答と以降の質問はすべて親投稿のスレッドに返信する。回答は停止ボタンが消えて本文が 1.5 秒変わらなくなった時点で転送する。履歴の一括保存では Slack に送信しない。
 
-拡張機能は質問本文を蓄積しない。永続保存するのは Webhook URL のみ。作業中の会話 URL・タイトルと進捗だけを `chrome.storage.session` のメモリ上に保持し、本文は `.md` に直接出力する。タブを閉じると作業情報も削除する。旧版で保持していた質問履歴と取り込み情報は、更新後に拡張機能が起動すると削除する。
+Incoming Webhook は投稿の `ts` を返さず親投稿のスレッドに返信できないため、Bot Token で `chat.postMessage` を使う。
+
+拡張機能は質問本文を蓄積しない。永続保存するのは Bot Token・チャンネル ID と、会話 ID → 親投稿 `ts` の対応表のみ。作業中の会話 URL・タイトルと進捗だけを `chrome.storage.session` のメモリ上に保持し、本文は `.md` に直接出力する。タブを閉じると作業情報も削除する。旧版で保持していた質問履歴・取り込み情報・Discord Webhook URL は、更新後に拡張機能が起動すると削除する。
 
 ## チェック
 

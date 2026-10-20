@@ -5,7 +5,7 @@
   :root { --edge: 12px; --panel: 8px; --gap: 8px; --section: 16px; }
   body { width: 320px; margin: 0; padding: var(--edge); font: 13px sans-serif; }
   label { display: block; margin-bottom: var(--gap); }
-  .webhook-row { display: flex; gap: var(--gap); }
+  .slack-row { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
   input, button { font: inherit; padding: var(--panel); }
   input { flex: 1; min-width: 0; }
   button:enabled { cursor: pointer; }
@@ -13,9 +13,12 @@
   #status { margin-top: var(--gap); overflow-wrap: anywhere; }
   @media (hover: hover) { button:enabled:hover { filter: brightness(0.9); } }
 </style>
-<label for="webhook">Discord Webhook URL</label>
-<div class="webhook-row">
-  <input id="webhook" type="url" placeholder="https://discord.com/api/webhooks/...">
+<label for="slackToken">Slack Bot Token / チャンネル ID</label>
+<div class="slack-row">
+  <input id="slackToken" type="password" placeholder="xoxb-..." aria-label="Slack Bot Token">
+</div>
+<div class="slack-row">
+  <input id="slackChannel" placeholder="C0123456789" aria-label="Slack チャンネル ID">
   <button id="save">保存</button>
 </div>
 <button id="export">Gemini を開いて履歴を保存</button>

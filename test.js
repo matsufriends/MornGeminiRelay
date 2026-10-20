@@ -5,11 +5,11 @@ const vm = require('node:vm');
 const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 
 (async () => {
-  const local = { webhook: 'https://discord.com/api/webhooks/example', history: [{ text: '旧履歴' }], importQueue: ['old'], importTotal: 1 };
+  const local = { slackToken: 'xoxb-test', slackChannel: 'C1', webhook: 'https://discord.com/api/webhooks/example', history: [{ text: '旧履歴' }], importQueue: ['old'], importTotal: 1 };
   const session = {}, downloads = [], tabs = [], sent = [];
   let listener, onRemoved, state = 'complete', nextId = 1;
   const storage = (data) => ({
-    get: async (key) => ({ [key]: copy(data[key]) }),
+    get: async (keys) => Object.fromEntries([].concat(keys).map((key) => [key, copy(data[key])])),
     set: async (values) => Object.assign(data, copy(values)),
     remove: async (keys) => { for (const key of [].concat(keys)) delete data[key]; },
   });
@@ -26,12 +26,23 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
       search: async () => [{ state, error: state === 'interrupted' ? 'DISK_FULL' : undefined }],
     },
   };
-  vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, setTimeout, fetch: async (url, options) => { sent.push({ url, ...options }); return { ok: true }; } });
+  vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, setTimeout, fetch: async (url, options) => { sent.push({ url, ...options, body: JSON.parse(options.body) }); return { json: async () => ({ ok: true, ts: 'ts' + sent.length }) }; } });
   const message = (msg, sender = {}) => new Promise((resolve) => assert.equal(listener(msg, sender, resolve), true));
-  assert.deepEqual(Object.keys(local), ['webhook'], '旧履歴を削除し、設定だけを保持する');
-  await message({ type: 'prompt', text: '新しい質問', account: 'test account' });
-  assert.equal(sent.length, 1);
-  assert.deepEqual(Object.keys(local), ['webhook'], 'Discord 転送で本文を蓄積しない');
+  assert.deepEqual(Object.keys(local), ['slackToken', 'slackChannel'], '旧履歴と Discord 設定を削除し、Slack 設定だけを保持する');
+  // 新規会話の質問 2 件を同時に送っても親投稿は 1 つで、残りはそのスレッドへ入る
+  await Promise.all([
+    message({ type: 'prompt', conversation: 'abc', text: '新しい質問 <!channel>', account: 'test account' }),
+    message({ type: 'answer', conversation: 'abc', text: '回答 & 補足' }),
+  ]);
+  await message({ type: 'prompt', conversation: 'xyz', text: '別の会話', account: 'test account' });
+  assert.equal(sent[0].url, 'https://slack.com/api/chat.postMessage');
+  assert.equal(sent[0].headers.Authorization, 'Bearer xoxb-test');
+  assert.deepEqual(sent.map(({ body }) => body.thread_ts), [undefined, 'ts1', undefined], '会話ごとに最初の投稿を親にし、以降はスレッドへ返信する');
+  assert.equal(sent[0].body.text, '*test account*\n新しい質問 &lt;!channel&gt;', 'メンションなどの Slack 記法を無効化する');
+  assert.equal(sent[1].body.text, '*Gemini*\n回答 &amp; 補足');
+  assert.ok((await message({ type: 'prompt', conversation: '../x', text: 'x' })).error);
+  assert.equal(JSON.stringify(local).includes('新しい質問'), false, 'Slack 転送で本文を蓄積しない');
+  sent.length = 1;
   await message({ type: 'startExport' });
   assert.equal(tabs[0].url, 'https://gemini.google.com/app');
   const sender = { tab: { id: tabs[0].id }, url: 'https://gemini.google.com/app/one' };
@@ -56,7 +67,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await message({ type: 'exportConversation', texts: ['最後の質問'] }, sender);
   assert.equal(session.exportJob.done, true);
   assert.equal(session.exportJob.saved, 2);
-  assert.equal(sent.length, 1, '履歴の保存で Discord に送信しない');
+  assert.equal(sent.length, 1, '履歴の保存で Slack に送信しない');
   await onRemoved(sender.tab.id);
   assert.equal(session.exportJob, undefined, '専用タブを閉じたら作業情報を消す');
   const update = chrome.tabs.update;
@@ -116,5 +127,15 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('exportCurrentPage()', context);
   assert.deepEqual(copy(exported), [{ type: 'exportConversation', texts: ['fallback'] }], '実際のページ処理から本文をダウンロードへ渡す');
   assert.equal(context.location.href, 'https://gemini.google.com/app/two', '保存成功後に次の会話を開く');
-  console.log('PASS: 転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  const relayed = [];
+  let stopping = true;
+  context.chrome.runtime.sendMessage = async (msg) => { relayed.push(msg); return {}; };
+  document.querySelectorAll = (selector) => selector === 'model-response' ? [{ querySelector: () => ({ innerText: now < 1000 ? '途中' : '回答' }) }] : [];
+  document.querySelector = () => stopping ? {} : null;
+  now = 0;
+  tick = (time) => { stopping = time < 2000; };
+  await vm.runInContext('relayAnswer("abc", 0)', context);
+  assert.deepEqual(copy(relayed), [{ type: 'answer', conversation: 'abc', text: '回答' }], '生成完了後の回答を 1 回だけ転送する');
+  assert.ok(now >= 3200, '停止ボタンが消えてから 1.5 秒待つ');
+  console.log('PASS: Slack スレッド転送・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
