@@ -4,21 +4,38 @@ chrome.storage.local.remove(['history', 'importQueue', 'importTotal', 'webhook']
 const escapeSlack = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 let slackQueue = Promise.resolve();
 
-// 会話の最初の投稿を親にし、以降の質問と回答はその ts をスレッドにして返信する。
+// files.getUploadURLExternal が JSON を受け付けないため、全メソッドをフォーム形式で呼ぶ。undefined の項目は送らない。
+async function slackApi(token, method, params) {
+  const response = await fetch(`https://slack.com/api/${method}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: new URLSearchParams(JSON.parse(JSON.stringify(params))),
+  });
+  const result = await response.json();
+  if (!result.ok) throw new Error(`Slack ${method}: ${result.error}`);
+  return result;
+}
+
+// 会話の最初の投稿を親にし、以降の質問と回答はその ts をスレッドにして返信する。添付ファイルも同じスレッドへ上げる。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
-function postToSlack(conversation, text) {
+function postToSlack(conversation, text, files = []) {
   const post = slackQueue.then(async () => {
     const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
     if (!slackToken || !slackChannel) return;
-    const response = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${slackToken}` },
-      body: JSON.stringify({ channel: slackChannel, thread_ts: threads[conversation], text: text.slice(0, 39000) }),
-    });
-    const result = await response.json();
-    if (!result.ok) throw new Error(`Slack: ${result.error}`);
+    const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: threads[conversation], text: text.slice(0, 39000) });
+    const thread = threads[conversation] || result.ts;
     // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
-    if (!threads[conversation]) await chrome.storage.local.set({ threads: { ...threads, [conversation]: result.ts } });
+    if (!threads[conversation]) await chrome.storage.local.set({ threads: { ...threads, [conversation]: thread } });
+    if (!files.length) return;
+    const uploaded = [];
+    for (const file of files) {
+      const bytes = new TextEncoder().encode(file.content);
+      const { upload_url, file_id } = await slackApi(slackToken, 'files.getUploadURLExternal', { filename: file.name, length: bytes.length });
+      const upload = await fetch(upload_url, { method: 'POST', body: bytes });
+      if (!upload.ok) throw new Error(`Slack upload: HTTP ${upload.status}`);
+      uploaded.push({ id: file_id, title: file.name });
+    }
+    await slackApi(slackToken, 'files.completeUploadExternal', { files: JSON.stringify(uploaded), channel_id: slackChannel, thread_ts: thread });
   });
   slackQueue = post.catch(() => {});
   return post;
@@ -44,9 +61,11 @@ async function downloadConversation(conversation, texts) {
 
 async function handleMessage(msg, sender) {
   if (msg.type === 'prompt' || msg.type === 'answer') {
+    const files = msg.files || [];
     if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof msg.text !== 'string') throw new Error('不正な転送内容です');
+    if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
     const author = msg.type === 'prompt' ? msg.account || 'unknown' : 'Gemini';
-    await postToSlack(msg.conversation, `*${escapeSlack(author)}*\n${escapeSlack(msg.text)}`);
+    await postToSlack(msg.conversation, `*${escapeSlack(author)}*\n${escapeSlack(msg.text)}`, files);
     return {};
   }
 

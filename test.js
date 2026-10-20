@@ -26,7 +26,11 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
       search: async () => [{ state, error: state === 'interrupted' ? 'DISK_FULL' : undefined }],
     },
   };
-  vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, setTimeout, fetch: async (url, options) => { sent.push({ url, ...options, body: JSON.parse(options.body) }); return { json: async () => ({ ok: true, ts: 'ts' + sent.length }) }; } });
+  const fetch = async (url, options) => {
+    sent.push({ url, ...options, body: options.body instanceof URLSearchParams ? Object.fromEntries(options.body) : new TextDecoder().decode(options.body) });
+    return { ok: true, json: async () => url.endsWith('getUploadURLExternal') ? { ok: true, upload_url: 'https://files.slack.com/upload/' + sent.length, file_id: 'F' + sent.length } : { ok: true, ts: 'ts' + sent.length } };
+  };
+  vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, URLSearchParams, TextEncoder, setTimeout, fetch });
   const message = (msg, sender = {}) => new Promise((resolve) => assert.equal(listener(msg, sender, resolve), true));
   assert.deepEqual(Object.keys(local), ['slackToken', 'slackChannel'], '旧履歴と Discord 設定を削除し、Slack 設定だけを保持する');
   // 新規会話の質問 2 件を同時に送っても親投稿は 1 つで、残りはそのスレッドへ入る
@@ -42,6 +46,13 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.equal(sent[1].body.text, '*Gemini*\n回答 &amp; 補足');
   assert.ok((await message({ type: 'prompt', conversation: '../x', text: 'x' })).error);
   assert.equal(JSON.stringify(local).includes('新しい質問'), false, 'Slack 転送で本文を蓄積しない');
+  sent.length = 0;
+  await message({ type: 'answer', conversation: 'abc', text: '📎 code-1.html', files: [{ name: 'code-1.html', content: '<p>あ</p>' }] });
+  assert.deepEqual(sent.map(({ url }) => url.split('/').pop()), ['chat.postMessage', 'files.getUploadURLExternal', '2', 'files.completeUploadExternal'], 'コードを同じスレッドへ添付する');
+  assert.equal(sent[1].body.length, '10', 'ファイル長はバイト数で送る');
+  assert.equal(sent[2].body, '<p>あ</p>');
+  assert.deepEqual(sent[3].body, { files: JSON.stringify([{ id: 'F2', title: 'code-1.html' }]), channel_id: 'C1', thread_ts: 'ts1' });
+  assert.ok((await message({ type: 'answer', conversation: 'abc', text: 'x', files: [{ name: '../x', content: 'x' }] })).error);
   sent.length = 1;
   await message({ type: 'startExport' });
   assert.equal(tabs[0].url, 'https://gemini.google.com/app');
@@ -130,12 +141,30 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const relayed = [];
   let stopping = true;
   context.chrome.runtime.sendMessage = async (msg) => { relayed.push(msg); return {}; };
-  document.querySelectorAll = (selector) => selector === 'model-response' ? [{ querySelector: () => ({ innerText: now < 1000 ? '途中' : '回答' }) }] : [];
+  const el = (tagName, props, ...childNodes) => {
+    const node = { nodeType: 1, tagName, childNodes, children: childNodes.filter((child) => child.nodeType === 1), className: '', getAttribute: (name) => props?.[name] ?? null, ...props };
+    node.querySelector = (selector) => node.children.map((child) => selector === child.tagName.toLowerCase() || selector === '.' + child.className ? child : child.querySelector(selector)).find(Boolean) || null;
+    node.textContent = node.innerText ??= childNodes.map((child) => child.textContent).join('');
+    return node;
+  };
+  const t = (textContent) => ({ nodeType: 3, textContent });
+  const answer = el('MESSAGE-CONTENT', {},
+    el('H3', {}, t('主な仕様')),
+    el('OL', {},
+      el('LI', {}, el('P', {}, el('STRONG', {}, t('操作性')), t(':')), el('UL', {}, el('LI', {}, t('マウス '), el('CODE', {}, t('A/D'))))),
+      el('LI', {}, el('P', {}, t('見た目')))),
+    el('CODE-BLOCK', {}, el('DIV', { className: 'code-block-decoration' }, t('HTML'), el('BUTTON', {}, t('コピー'))), el('PRE', {}, el('CODE', { className: 'language-html', innerText: '<p>\n  x\n</p>\n' }))),
+    el('P', {}, t('以上')));
+  assert.deepEqual(copy(vm.runInContext('toMrkdwn', context)(answer)), {
+    text: '\u200B*主な仕様*\u200B\n\n1. \u200B*操作性*\u200B:\n    ◦ マウス `A/D`\n2. 見た目\n\n📎 code-1.html\n\n以上',
+    files: [{ name: 'code-1.html', content: '<p>\n  x\n</p>' }],
+  }, '見出し・番号・入れ子の箇条書き・太字・コードを Slack 記法へ変換し、コードは添付に回す');
+  document.querySelectorAll = (selector) => selector === 'model-response' ? [{ querySelector: () => el('MESSAGE-CONTENT', {}, t(now < 1000 ? '途中' : '回答')) }] : [];
   document.querySelector = () => stopping ? {} : null;
   now = 0;
   tick = (time) => { stopping = time < 2000; };
   await vm.runInContext('relayAnswer("abc", 0)', context);
-  assert.deepEqual(copy(relayed), [{ type: 'answer', conversation: 'abc', text: '回答' }], '生成完了後の回答を 1 回だけ転送する');
+  assert.deepEqual(copy(relayed), [{ type: 'answer', conversation: 'abc', text: '回答', files: [] }], '生成完了後の回答を 1 回だけ転送する');
   assert.ok(now >= 3200, '停止ボタンが消えてから 1.5 秒待つ');
-  console.log('PASS: Slack スレッド転送・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  console.log('PASS: Slack スレッド転送・コード添付・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

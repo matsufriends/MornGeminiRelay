@@ -18,20 +18,69 @@ async function conversationId() {
 }
 
 const STOP_BTN = 'button[aria-label*="停止"], button[aria-label*="Stop" i]';
-const lastAnswer = () => {
+const lastResponse = () => {
   const responses = document.querySelectorAll('model-response');
   const last = responses[responses.length - 1];
-  return (last?.querySelector('message-content') || last)?.innerText.trim() || '';
+  return last?.querySelector('message-content') || last;
 };
+
+const EXT = { javascript: 'js', typescript: 'ts', python: 'py', bash: 'sh', shell: 'sh', csharp: 'cs', 'c#': 'cs', markdown: 'md', yaml: 'yml' };
+// Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る
+const wrap = (mark, text) => text.trim() ? `​${mark}${text.trim()}${mark}​` : '';
+
+// 回答の DOM を Slack mrkdwn に変換する。コードブロックは本文から外し、添付ファイルとして返す。
+function toMrkdwn(root) {
+  const files = [];
+  const walk = (node, depth) => {
+    if (node.nodeType === 3) return node.textContent.replace(/\s+/g, ' ');
+    if (node.nodeType !== 1 || /^(BUTTON|MAT-ICON|SVG|STYLE|SCRIPT)$/.test(node.tagName)) return '';
+    const inner = () => [...node.childNodes].map((child) => walk(child, depth)).join('');
+    switch (node.tagName) {
+      case 'CODE-BLOCK':
+      case 'PRE': {
+        const code = node.querySelector('code') || node;
+        const content = code.innerText.replace(/\n$/, '');
+        if (!content.trim()) return '';
+        const lang = (code.className.match(/language-([\w#+-]+)/)?.[1] || node.querySelector('.code-block-decoration')?.innerText.split('\n')[0] || '').trim().toLowerCase();
+        const name = `code-${files.length + 1}.${EXT[lang] || lang.replace(/\W/g, '') || 'txt'}`;
+        files.push({ name, content });
+        return `\n📎 ${name}\n`;
+      }
+      case 'P': return `\n${inner().trim()}\n\n`;
+      case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6': return `\n${wrap('*', inner())}\n`;
+      case 'STRONG': case 'B': return wrap('*', inner());
+      case 'EM': case 'I': return wrap('_', inner());
+      case 'S': case 'DEL': return wrap('~', inner());
+      case 'CODE': return `\`${node.textContent}\``;
+      case 'BR': return '\n';
+      case 'HR': return '\n———\n';
+      case 'A': return node.href && !inner().includes(node.href) ? `${inner()} (${node.href})` : inner();
+      case 'UL':
+      case 'OL': {
+        const start = Number(node.getAttribute('start')) || 1;
+        return '\n' + [...node.children].filter((child) => child.tagName === 'LI').map((li, i) => {
+          const marker = node.tagName === 'OL' ? `${start + i}. ` : depth ? '◦ ' : '• ';
+          const body = [...li.childNodes].map((child) => walk(child, depth + 1)).join('').replace(/\n\s*\n/g, '\n').trim();
+          return '    '.repeat(depth) + marker + body;
+        }).join('\n') + '\n\n';
+      }
+      case 'TABLE': return '\n' + [...node.querySelectorAll('tr')].map((tr) => [...tr.children].map((cell) => walk(cell, depth).trim()).join(' | ')).join('\n') + '\n\n';
+      default: return inner();
+    }
+  };
+  // 入れ子リストの字下げだけ残し、それ以外の行頭・行末の空白は消す
+  const text = walk(root, 0).split('\n').map((line) => /^ +[•◦\d]/.test(line) ? line.trimEnd() : line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { text, files };
+}
 
 // 新しい回答が現れ、停止ボタンが消えて本文が 1.5 秒変わらなくなったら完了とみなす
 async function relayAnswer(conversation, before) {
   await waitFor(() => document.querySelectorAll('model-response').length > before, '回答が見つかりません');
   let previous = '', changed = Date.now();
   for (const end = Date.now() + 600000; Date.now() < end; await sleep(300)) {
-    const current = lastAnswer();
+    const current = lastResponse()?.innerText.trim() || '';
     if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
-    if (current && Date.now() - changed >= 1500) return request({ type: 'answer', conversation, text: current });
+    if (current && Date.now() - changed >= 1500) return request({ type: 'answer', conversation, ...toMrkdwn(lastResponse()) });
   }
   throw new Error('回答の生成が完了しませんでした');
 }
