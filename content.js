@@ -17,11 +17,23 @@ async function conversationId() {
   throw new Error('会話 ID を取得できませんでした');
 }
 
+// 送信前に添付された画像のファイル名。画像は送信後の表示にファイル名が残らないため、選択・ドロップ・貼り付けの時点で控える。
+// ponytail: 送信前に画像を外すと以降の名前が 1 つずれる。問題になったら入力欄のプレビューと突き合わせる。
+let pickedImages = [];
+const pickImages = (files) => { for (const file of files || []) if (file.type.startsWith('image/')) pickedImages.push(file.name); };
+document.addEventListener('change', (e) => { if (e.target.type === 'file') pickImages(e.target.files); }, true);
+document.addEventListener('drop', (e) => pickImages(e.dataTransfer?.files), true);
+document.addEventListener('paste', (e) => pickImages(e.clipboardData?.files), true);
+
 // 送信済みの質問に付いた添付の名前。中身は送らず、添付があったことだけを知らせる。
-// 画像はファイル名が表示されず、ボタンのラベルも「…ライトボックスに表示」という操作名なので「画像」とだけ示す。
+// ファイルは表示名が省略される (Bar.png.meta → Bar.png) ので、完全な名前が入るボタンの aria-label を使う。
+// 画像は表示名がなくボタンのラベルも「…ライトボックスに表示」という操作名なので、控えた名前を添付順に当てる。
 function attachments(query) {
-  return [...(query?.querySelectorAll('user-query-file-preview') || [])].map((preview) =>
-    preview.querySelector('.filename-label')?.innerText.trim() || (preview.querySelector('img') ? '画像' : 'ファイル'));
+  const names = [...(query?.querySelectorAll('user-query-file-preview') || [])].map((preview) => preview.querySelector('.filename-label')
+    ? preview.querySelector('button')?.getAttribute('aria-label')?.trim() || preview.querySelector('.filename-label').innerText.trim()
+    : pickedImages.shift() || '画像');
+  pickedImages = [];
+  return names;
 }
 
 const STOP_BTN ='button[aria-label*="停止"], button[aria-label*="Stop" i]';

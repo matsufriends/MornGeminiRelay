@@ -98,8 +98,9 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   let now = 0, tick = () => {}, busy = false, links = [];
   const query = { getClientRects: () => [{}], innerText: 'fallback', querySelectorAll: () => [] };
   const scroller = { parentElement: null, scrollHeight: 10, scrollTop: 0 };
+  const domHandlers = {};
   const document = {
-    addEventListener() {},
+    addEventListener: (type, fn) => { domHandlers[type] = fn; },
     querySelector: () => links[0],
     querySelectorAll: (selector) => selector === 'user-query .query-text' ? [query] : selector === '[data-test-id="conversation"] a' ? links : [],
   };
@@ -171,10 +172,16 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
     files: [{ name: 'code-1.html', content: '<p>\n  x\n</p>' }],
   }, '見出し・番号・入れ子の箇条書き・太字・コードを Slack 記法へ変換し、コードブロックは別投稿に回す。Canvas はタイトルだけ残し、描画途中のエディタは含めない');
   const preview_ = (props, ...children) => el('USER-QUERY-FILE-PREVIEW', props, ...children);
+  const pick = (type, files) => domHandlers[type]({ target: { type: 'file', files }, dataTransfer: { files }, clipboardData: { files } });
+  pick('change', [{ name: 'Block.cs.meta', type: '' }]);
+  pick('drop', [{ name: 'Bar.png', type: 'image/png' }]);
+  pick('paste', [{ name: 'image.png', type: 'image/png' }]);
   assert.deepEqual(copy(vm.runInContext('attachments', context)(el('USER-QUERY', {},
-    preview_({}, el('BUTTON', {}, el('DIV', { className: 'filename-label', innerText: ' Scripts ' }))),
+    preview_({}, el('BUTTON', { 'aria-label': 'Bar.png.meta' }, el('DIV', { className: 'filename-label', innerText: 'Bar.png' }))),
     preview_({}, el('BUTTON', { 'aria-label': 'アップロードした画像をライトボックスに表示' }, el('IMG', { alt: '' }))),
-    preview_({}, el('DIV', {}))))), ['Scripts', '画像', 'ファイル'], '添付は表示名を使い、名前のない画像は操作名ではなく「画像」とする');
+    preview_({}, el('BUTTON', {}, el('IMG', { alt: '' }))),
+    preview_({}, el('BUTTON', {}, el('IMG', { alt: '' })))))), ['Bar.png.meta', 'Bar.png', 'image.png', '画像'], 'ファイルは aria-label の完全な名前、画像は添付時に控えた名前を順に当て、足りなければ「画像」とする');
+  assert.deepEqual(copy(vm.runInContext('attachments', context)(el('USER-QUERY', {}, preview_({}, el('IMG', {}))))), ['画像'], '控えた名前は送信ごとに使い切り、次の質問に持ち越さない');
   assert.deepEqual(copy(vm.runInContext('attachments', context)(undefined)), [], '質問が描画されなければ添付なし');
   let previewListener;
   const posted = [];
