@@ -17,15 +17,16 @@ async function slackApi(token, method, params) {
 }
 
 // 会話の最初の投稿を親にし、以降の質問・回答はその ts をスレッドにして返信する。
+// author ({ username, icon_emoji }) で投稿者名とアイコンを差し替え、同じ Bot でも自分と Gemini を見分けられるようにする (chat:write.customize が必要)。
 // コードは長くても 1 つにまとまり折りたたまれるよう、ファイルとして同じスレッドに添付する (files:write が必要)。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
-function postToSlack(conversation, text, files = []) {
+function postToSlack(conversation, text, files = [], author = {}) {
   const post = slackQueue.then(async () => {
     const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
     if (!slackToken || !slackChannel) return;
     let thread = threads[conversation];
     if (text) {
-      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000) });
+      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000), ...author });
       if (!thread) {
         thread = result.ts;
         // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
@@ -71,8 +72,8 @@ async function handleMessage(msg, sender) {
     const files = msg.files || [], text = msg.type === 'canvas' ? '' : msg.text;
     if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof text !== 'string') throw new Error('不正な転送内容です');
     if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
-    const author = msg.type === 'prompt' ? msg.account || 'unknown' : 'Gemini';
-    await postToSlack(msg.conversation, text && `*${escapeSlack(author)}*\n${escapeSlack(text)}`, files);
+    const author = msg.type === 'prompt' ? { username: msg.account || 'unknown', icon_emoji: ':technologist:' } : { username: 'Gemini', icon_emoji: ':sparkles:' };
+    await postToSlack(msg.conversation, escapeSlack(text), files, author);
     return {};
   }
 
