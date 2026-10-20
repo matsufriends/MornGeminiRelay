@@ -82,17 +82,27 @@ function toMrkdwn(root) {
 const descendants = (win, depth = 3) => depth ? Array.from({ length: win.length }, (_, i) => win[i]).flatMap((child) => [child, ...descendants(child, depth - 1)]) : [];
 
 // プレビュー表示中の Canvas は、iframe とその配下のフレームで動く preview.js に HTML を問い合わせる。
-// プレビューの読み込みが回答完了より遅れることがあるので、応答が来るまで繰り返し問い合わせる。
-function canvasHtml(iframe) {
+// プレビューの読み込みが回答完了より遅れ、その間に Gemini が iframe を作り直すことがあるので、毎回 index で探し直して繰り返し問い合わせる。
+function canvasHtml(index) {
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
+    const log = { asked: 0, replies: [] };
     const done = (html) => { removeEventListener('message', onMessage); clearInterval(timer); clearTimeout(timeout); resolve(html); };
-    const onMessage = (event) => { if (event.data?.type === 'morn-gemini-relay:canvas' && event.data.id === id) done(event.data.html); };
-    // iframe 自身が blob に遷移して HTML を持つこともあるので、自身も問い合わせ先に含める
-    const ask = () => { for (const frame of iframe.contentWindow ? [iframe.contentWindow, ...descendants(iframe.contentWindow)] : []) frame.postMessage({ type: 'morn-gemini-relay:get-canvas', id }, '*'); };
+    const onMessage = (event) => {
+      if (event.data?.type !== 'morn-gemini-relay:canvas') return;
+      log.replies.push({ origin: event.origin, match: event.data.id === id, length: event.data.html?.length });
+      if (event.data.id === id) done(event.data.html);
+    };
+    const ask = () => {
+      const win = lastResponse()?.querySelectorAll('immersive-entry-chip')[index]?.querySelector('iframe')?.contentWindow;
+      // iframe 自身が blob に遷移して HTML を持つこともあるので、自身も問い合わせ先に含める
+      const frames = win ? [win, ...descendants(win)] : [];
+      log.asked = frames.length;
+      for (const frame of frames) frame.postMessage({ type: 'morn-gemini-relay:get-canvas', id }, '*');
+    };
     addEventListener('message', onMessage);
     const timer = setInterval(ask, 500);
-    const timeout = setTimeout(() => { console.warn('MornGeminiRelay: Canvas のコードを取得できませんでした'); done(''); }, 15000);
+    const timeout = setTimeout(() => { console.warn('MornGeminiRelay: Canvas のコードを取得できませんでした', JSON.stringify(log)); done(''); }, 15000);
     ask();
   });
 }
@@ -105,13 +115,14 @@ async function relayAnswer(conversation, before) {
     const current = lastResponse()?.innerText.trim() || '';
     if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
     if (current && Date.now() - changed >= 1500) {
+      const htmls = [];
+      for (let i = 0; i < lastResponse().querySelectorAll('immersive-entry-chip').length; i++) htmls[i] = await canvasHtml(i);
+      // 待つ間に DOM が作り直されていても最新の回答に書き込む。コード表示中なら canvas.js が同期で Monaco の全文を書き出す。
       const root = lastResponse();
-      document.dispatchEvent(new CustomEvent('morn-gemini-relay:canvas')); // コード表示中なら canvas.js が同期で全文を書き出す
-      for (const chip of root.querySelectorAll('immersive-entry-chip')) {
-        const iframe = chip.querySelector('iframe');
-        const html = !chip.dataset.mornCode && iframe && await canvasHtml(iframe);
-        if (html) Object.assign(chip.dataset, { mornCode: html, mornLang: 'html' });
-      }
+      document.dispatchEvent(new CustomEvent('morn-gemini-relay:canvas'));
+      root.querySelectorAll('immersive-entry-chip').forEach((chip, i) => {
+        if (!chip.dataset.mornCode && htmls[i]) Object.assign(chip.dataset, { mornCode: htmls[i], mornLang: 'html' });
+      });
       return request({ type: 'answer', conversation, ...toMrkdwn(root) });
     }
   }
