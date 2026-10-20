@@ -91,7 +91,9 @@ function canvasHtml(index) {
     const onMessage = (event) => {
       if (event.data?.type !== 'morn-gemini-relay:canvas') return;
       log.replies.push({ origin: event.origin, match: event.data.id === id, length: event.data.html?.length });
-      if (event.data.id === id) done(event.data.html);
+      if (event.data.id !== id) return;
+      if (event.data.error) console.warn(`MornGeminiRelay: Canvas のコードを送れません: ${event.data.error}`);
+      done(event.data.html);
     };
     const ask = () => {
       const win = lastResponse()?.querySelectorAll('immersive-entry-chip')[index]?.querySelector('iframe')?.contentWindow;

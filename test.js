@@ -177,9 +177,10 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const injected = '<script data-bard-client-injected="true">(function(){ window.__initial_auth_token = "secret"; })()</script>\n'
     + '<script ws-interception-config="{&quot;parentOrigin&quot;:&quot;https://gemini.google.com&quot;}" data-bard-client-injected="true">document.querySelectorAll("[data-bard-client-injected]")</script>\n';
   let previewUrl;
-  const preview = (protocol, html) => {
+  const preview = (protocol, html, window = {}) => {
     previewUrl = { createObjectURL: (blob) => 'blob:' + blob.size };
     vm.runInNewContext(fs.readFileSync('preview.js', 'utf8'), {
+      window,
       location: { protocol, href: 'blob:https://x.scf.usercontent.goog/1' },
       URL: previewUrl,
       fetch: async () => ({ text: async () => html }),
@@ -190,7 +191,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
     await previewListener({ origin, data: { type: 'morn-gemini-relay:get-canvas', id: 'req' }, source: { postMessage: (msg) => posted.push(msg) } });
   };
   const page = '<!DOCTYPE html><html><head>' + injected + '<title>x</title></head></html>';
-  const stripped = [{ type: 'morn-gemini-relay:canvas', id: 'req', html: '<!DOCTYPE html><html><head><title>x</title></head></html>' }];
+  const stripped = [{ type: 'morn-gemini-relay:canvas', id: 'req', html: '<!DOCTYPE html><html><head><title>x</title></head></html>', error: '' }];
   preview('blob:', page);
   await ask('https://evil.example');
   assert.equal(posted.length, 0, 'Gemini 以外からの問い合わせには答えない');
@@ -207,7 +208,16 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   posted.length = 0;
   preview('blob:', '<html><head><script data-bard-client-injected="true">window.__initial_auth_token = "secret";');
   await ask('https://gemini.google.com');
-  assert.equal(posted[0].html, '', '差し込みを取り切れない HTML は渡さない');
+  assert.deepEqual(copy(posted[0]), { type: 'morn-gemini-relay:canvas', id: 'req', html: '', error: '差し込みスクリプトを除去できませんでした' }, '差し込みを取り切れない HTML は渡さず、理由を返す');
+  posted.length = 0;
+  const token = 'ya29.token-value-123';
+  preview('blob:', '<html><body data-note="' + token + '">', { __initial_auth_token: token, __firebase_config: '{"apiKey":"AIzaKEY12345"}' });
+  await ask('https://gemini.google.com');
+  assert.equal(posted[0].error, '認証情報が残っていたため送りませんでした', 'トークンの値が残っていれば渡さない');
+  posted.length = 0;
+  preview('blob:', page.replace('<title>', '<title>data-bard-client-injected を説明する '), { __initial_auth_token: token });
+  await ask('https://gemini.google.com');
+  assert.equal(posted[0].error, '', '目印の文字列が本文に残るだけなら送る');
   document.querySelectorAll = (selector) => selector === 'model-response' ? [{ querySelector: () => el('MESSAGE-CONTENT', {}, t(now < 1000 ? '途中' : '回答')) }] : [];
   document.querySelector = () => stopping ? {} : null;
   now = 0;
