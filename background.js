@@ -17,16 +17,15 @@ async function slackApi(token, method, params) {
 }
 
 // 会話の最初の投稿を親にし、以降の質問・回答はその ts をスレッドにして返信する。
-// author ({ username, icon_emoji }) で投稿者名とアイコンを差し替え、同じ Bot でも自分と Gemini を見分けられるようにする (chat:write.customize が必要)。
 // コードは長くても 1 つにまとまり折りたたまれるよう、ファイルとして同じスレッドに添付する (files:write が必要)。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
-function postToSlack(conversation, text, files = [], author = {}) {
+function postToSlack(conversation, text, files = []) {
   const post = slackQueue.then(async () => {
     const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
     if (!slackToken || !slackChannel) return;
     let thread = threads[conversation];
     if (text) {
-      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000), ...author });
+      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000) });
       if (!thread) {
         thread = result.ts;
         // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
@@ -72,8 +71,10 @@ async function handleMessage(msg, sender) {
     const files = msg.files || [], text = msg.type === 'canvas' ? '' : msg.text;
     if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof text !== 'string') throw new Error('不正な転送内容です');
     if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
-    const author = msg.type === 'prompt' ? { username: msg.account || 'unknown', icon_emoji: ':technologist:' } : { username: 'Gemini', icon_emoji: ':sparkles:' };
-    await postToSlack(msg.conversation, escapeSlack(text), files, author);
+    // 同じ Bot が投稿するので、絵文字付きの太字の見出しと区切り線で自分と Gemini を見分けられるようにする。
+    // Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る。
+    const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(msg.account || 'unknown')}*\u200B` : '✨ \u200B*Gemini*\u200B';
+    await postToSlack(msg.conversation, text && `${author}\n────────────\n${escapeSlack(text)}`, files);
     return {};
   }
 
