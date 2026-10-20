@@ -42,8 +42,8 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.equal(sent[0].url, 'https://slack.com/api/chat.postMessage');
   assert.equal(sent[0].headers.Authorization, 'Bearer xoxb-test');
   assert.deepEqual(sent.map(({ body }) => body.thread_ts), [undefined, 'ts1', undefined], '会話ごとに最初の投稿を親にし、以降はスレッドへ返信する');
-  assert.equal(sent[0].body.text, '🧑‍💻 \u200B*test account*\u200B\n────────────\n新しい質問 &lt;!channel&gt;', '自分の発言はアカウント名の見出しを付け、メンションなどの Slack 記法を無効化する');
-  assert.equal(sent[1].body.text, '✨ \u200B*Gemini*\u200B\n────────────\n回答 &amp; 補足', 'Gemini の発言は別の見出しを付ける');
+  assert.equal(sent[0].body.text, '> 🧑‍💻 \u200B*test account*\u200B\n新しい質問 &lt;!channel&gt;', '自分の発言はアカウント名の見出しを付け、メンションなどの Slack 記法を無効化する');
+  assert.equal(sent[1].body.text, '> ✨ \u200B*Gemini*\u200B\n回答 &amp; 補足', 'Gemini の発言は別の見出しを付ける');
   assert.equal(sent[0].body.username, undefined, '投稿者名は差し替えない (追加スコープ不要)');
   assert.ok((await message({ type: 'prompt', conversation: '../x', text: 'x' })).error);
   assert.equal(JSON.stringify(local).includes('新しい質問'), false, 'Slack 転送で本文を蓄積しない');

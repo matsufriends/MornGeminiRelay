@@ -71,10 +71,10 @@ async function handleMessage(msg, sender) {
     const files = msg.files || [], text = msg.type === 'canvas' ? '' : msg.text;
     if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof text !== 'string') throw new Error('不正な転送内容です');
     if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
-    // 同じ Bot が投稿するので、絵文字付きの太字の見出しと区切り線で自分と Gemini を見分けられるようにする。
+    // 同じ Bot が投稿するので、名前の行を Slack の引用 (左の縦線) にして自分と Gemini を見分けられるようにする。
     // Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る。
     const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(msg.account || 'unknown')}*\u200B` : '✨ \u200B*Gemini*\u200B';
-    await postToSlack(msg.conversation, text && `${author}\n────────────\n${escapeSlack(text)}`, files);
+    await postToSlack(msg.conversation, text && `> ${author}\n${escapeSlack(text)}`, files);
     return {};
   }
 
