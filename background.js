@@ -74,7 +74,10 @@ async function handleMessage(msg, sender) {
     // 同じ Bot が投稿するので、名前の行を Slack の引用 (左の縦線) にして自分と Gemini を見分けられるようにする。
     // Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る。
     const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(msg.account || 'unknown')}*\u200B` : '✨ \u200B*Gemini*\u200B';
-    await postToSlack(msg.conversation, text && `> ${author}\n${escapeSlack(text)}`, files);
+    // 添付は名前だけを知らせる (中身は送らない)
+    const attached = Array.isArray(msg.attachments) ? msg.attachments.filter((name) => typeof name === 'string' && name).map((name) => name.slice(0, 200)) : [];
+    const note = attached.length ? `\n📎 添付: ${escapeSlack(attached.join(', '))}` : '';
+    await postToSlack(msg.conversation, text && `> ${author}\n${escapeSlack(text)}${note}`, files);
     return {};
   }
 

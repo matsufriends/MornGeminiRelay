@@ -17,7 +17,14 @@ async function conversationId() {
   throw new Error('会話 ID を取得できませんでした');
 }
 
-const STOP_BTN = 'button[aria-label*="停止"], button[aria-label*="Stop" i]';
+// 送信済みの質問に付いた添付の名前。中身は送らず、添付があったことだけを知らせる。
+// 画像などファイル名が表示されないものは、ボタンのラベルや代替テキストで代用する。
+function attachments(query) {
+  return [...(query?.querySelectorAll('user-query-file-preview') || [])].map((preview) =>
+    preview.querySelector('.filename-label')?.innerText.trim() || preview.querySelector('button')?.getAttribute('aria-label')?.trim() || preview.querySelector('img')?.alt?.trim() || 'ファイル');
+}
+
+const STOP_BTN ='button[aria-label*="停止"], button[aria-label*="Stop" i]';
 const lastResponse = () => {
   const responses = document.querySelectorAll('model-response');
   const last = responses[responses.length - 1];
@@ -132,11 +139,15 @@ async function relay() {
   const text = editor?.innerText.trim();
   if (!text) return;
   const before = document.querySelectorAll('model-response').length;
+  const queries = document.querySelectorAll('user-query').length;
   for (let i = 0; i < 10; i++) {
     await sleep(150);
     if (!editor.innerText.trim()) {
       const conversation = await conversationId();
-      await request({ type: 'prompt', conversation, text, account: account() });
+      // 添付は送信後の質問に表示されるので、新しい質問が描画されるのを待って読む (出なければ添付なし扱い)
+      await waitFor(() => document.querySelectorAll('user-query').length > queries, '').catch(() => {});
+      const query = document.querySelectorAll('user-query')[queries];
+      await request({ type: 'prompt', conversation, text, account: account(), attachments: attachments(query) });
       await relayAnswer(conversation, before);
       return relayCanvas(conversation, before);
     }

@@ -45,6 +45,9 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.equal(sent[0].body.text, '> 🧑‍💻 \u200B*test account*\u200B\n新しい質問 &lt;!channel&gt;', '自分の発言はアカウント名の見出しを付け、メンションなどの Slack 記法を無効化する');
   assert.equal(sent[1].body.text, '> ✨ \u200B*Gemini*\u200B\n回答 &amp; 補足', 'Gemini の発言は別の見出しを付ける');
   assert.equal(sent[0].body.username, undefined, '投稿者名は差し替えない (追加スコープ不要)');
+  sent.length = 0;
+  await message({ type: 'prompt', conversation: 'abc', text: '分析して', account: 'me', attachments: ['Scripts', 'a<b>.png'] });
+  assert.equal(sent[0].body.text, '> 🧑‍💻 \u200B*me*\u200B\n分析して\n📎 添付: Scripts, a&lt;b&gt;.png', '添付は名前だけを知らせる');
   assert.ok((await message({ type: 'prompt', conversation: '../x', text: 'x' })).error);
   assert.equal(JSON.stringify(local).includes('新しい質問'), false, 'Slack 転送で本文を蓄積しない');
   sent.length = 0;
@@ -167,6 +170,12 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
     text: '\u200B*主な仕様*\u200B\n\n1. \u200B*操作性*\u200B:\n    ◦ マウス `A/D`\n2. 見た目\n\n📎 code-1.html\nNeon Breakout Game\n以上',
     files: [{ name: 'code-1.html', content: '<p>\n  x\n</p>' }],
   }, '見出し・番号・入れ子の箇条書き・太字・コードを Slack 記法へ変換し、コードブロックは別投稿に回す。Canvas はタイトルだけ残し、描画途中のエディタは含めない');
+  const preview_ = (props, ...children) => el('USER-QUERY-FILE-PREVIEW', props, ...children);
+  assert.deepEqual(copy(vm.runInContext('attachments', context)(el('USER-QUERY', {},
+    preview_({}, el('BUTTON', {}, el('DIV', { className: 'filename-label', innerText: ' Scripts ' }))),
+    preview_({}, el('BUTTON', { 'aria-label': 'photo.png' }, el('IMG', { alt: '' }))),
+    preview_({}, el('IMG', { alt: '' }))))), ['Scripts', 'photo.png', 'ファイル'], '添付の名前を表示名・ラベルの順に拾い、なければ「ファイル」とする');
+  assert.deepEqual(copy(vm.runInContext('attachments', context)(undefined)), [], '質問が描画されなければ添付なし');
   let previewListener;
   const posted = [];
   const injected = '<script data-bard-client-injected="true">(function(){ window.__initial_auth_token = "secret"; })()</script>\n'
