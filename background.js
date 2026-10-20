@@ -4,7 +4,7 @@ chrome.storage.local.remove(['history', 'importQueue', 'importTotal', 'webhook']
 const escapeSlack = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 let slackQueue = Promise.resolve();
 
-// files.getUploadURLExternal が JSON を受け付けないため、全メソッドをフォーム形式で呼ぶ。undefined の項目は送らない。
+// undefined の項目 (親投稿時の thread_ts) は送らない
 async function slackApi(token, method, params) {
   const response = await fetch(`https://slack.com/api/${method}`, {
     method: 'POST',
@@ -16,7 +16,18 @@ async function slackApi(token, method, params) {
   return result;
 }
 
-// 会話の最初の投稿を親にし、以降の質問と回答はその ts をスレッドにして返信する。添付ファイルも同じスレッドへ上げる。
+// Slack の本文上限 (40,000 文字) に収まるよう、行の途中で切らずに分割する
+function chunkLines(text, limit = 39000) {
+  const chunks = [''];
+  for (const line of text.split('\n')) {
+    if (chunks[chunks.length - 1].length + line.length + 1 > limit) chunks.push('');
+    chunks[chunks.length - 1] += (chunks[chunks.length - 1] ? '\n' : '') + line.slice(0, limit);
+  }
+  return chunks;
+}
+
+// 会話の最初の投稿を親にし、以降の質問と回答はその ts をスレッドにして返信する。
+// コードは files:write を要求しないよう、ファイル添付ではなくスレッド内のコードブロックとして投稿する。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
 function postToSlack(conversation, text, files = []) {
   const post = slackQueue.then(async () => {
@@ -26,16 +37,11 @@ function postToSlack(conversation, text, files = []) {
     const thread = threads[conversation] || result.ts;
     // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
     if (!threads[conversation]) await chrome.storage.local.set({ threads: { ...threads, [conversation]: thread } });
-    if (!files.length) return;
-    const uploaded = [];
     for (const file of files) {
-      const bytes = new TextEncoder().encode(file.content);
-      const { upload_url, file_id } = await slackApi(slackToken, 'files.getUploadURLExternal', { filename: file.name, length: bytes.length });
-      const upload = await fetch(upload_url, { method: 'POST', body: bytes });
-      if (!upload.ok) throw new Error(`Slack upload: HTTP ${upload.status}`);
-      uploaded.push({ id: file_id, title: file.name });
+      for (const chunk of chunkLines(escapeSlack(file.content))) {
+        await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: `📎 ${file.name}\n\`\`\`\n${chunk}\n\`\`\`` });
+      }
     }
-    await slackApi(slackToken, 'files.completeUploadExternal', { files: JSON.stringify(uploaded), channel_id: slackChannel, thread_ts: thread });
   });
   slackQueue = post.catch(() => {});
   return post;
