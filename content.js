@@ -40,11 +40,10 @@ function toMrkdwn(root) {
   };
   const walk = (node, depth) => {
     if (node.nodeType === 3) return node.textContent.replace(/\s+/g, ' ');
-    // Canvas のエディタは見えている行しか DOM にないので、本文には入れない
+    // Canvas のエディタは見えている行しか DOM にないので本文には入れず、全文は relayCanvas が別に送る
     if (node.nodeType !== 1 || /^(BUTTON|MAT-ICON|SVG|STYLE|SCRIPT|XAP-CODE-EDITOR)$/.test(node.tagName)) return '';
     const inner = () => [...node.childNodes].map((child) => walk(child, depth)).join('');
     switch (node.tagName) {
-      case 'IMMERSIVE-ENTRY-CHIP': return node.dataset.mornCode ? addFile(node.dataset.mornCode, node.dataset.mornLang || '') : inner();
       case 'CODE-BLOCK':
       case 'PRE': {
         const code = node.querySelector('code') || node;
@@ -81,31 +80,22 @@ function toMrkdwn(root) {
 // 子孫フレームを列挙する。cross-origin でも length と添字アクセスは許可されている。
 const descendants = (win, depth = 3) => depth ? Array.from({ length: win.length }, (_, i) => win[i]).flatMap((child) => [child, ...descendants(child, depth - 1)]) : [];
 
-// プレビュー表示中の Canvas は、iframe とその配下のフレームで動く preview.js に HTML を問い合わせる。
-// プレビューの読み込みが回答完了より遅れ、その間に Gemini が iframe を作り直すことがあるので、毎回 index で探し直して繰り返し問い合わせる。
-function canvasHtml(index) {
+// Canvas の iframe とその配下のフレームで動く preview.js に HTML を問い合わせる。
+// HTML を持つフレームだけが答えるので、timeoutMs 以内に返事がなければ null (まだ生成中・読み込み中)。
+function canvasHtml(iframe, timeoutMs) {
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
-    const log = { asked: 0, replies: [] };
-    const done = (html) => { removeEventListener('message', onMessage); clearInterval(timer); clearTimeout(timeout); resolve(html); };
+    const done = (html) => { removeEventListener('message', onMessage); clearTimeout(timeout); resolve(html); };
     const onMessage = (event) => {
-      if (event.data?.type !== 'morn-gemini-relay:canvas') return;
-      log.replies.push({ origin: event.origin, match: event.data.id === id, length: event.data.html?.length });
-      if (event.data.id !== id) return;
+      if (event.data?.type !== 'morn-gemini-relay:canvas' || event.data.id !== id) return;
       if (event.data.error) console.warn(`MornGeminiRelay: Canvas のコードを送れません: ${event.data.error}`);
       done(event.data.html);
     };
-    const ask = () => {
-      const win = lastResponse()?.querySelectorAll('immersive-entry-chip')[index]?.querySelector('iframe')?.contentWindow;
-      // iframe 自身が blob に遷移して HTML を持つこともあるので、自身も問い合わせ先に含める
-      const frames = win ? [win, ...descendants(win)] : [];
-      log.asked = frames.length;
-      for (const frame of frames) frame.postMessage({ type: 'morn-gemini-relay:get-canvas', id }, '*');
-    };
     addEventListener('message', onMessage);
-    const timer = setInterval(ask, 500);
-    const timeout = setTimeout(() => { console.warn(`MornGeminiRelay: Canvas のコードを取得できませんでした ${JSON.stringify(log)}`); done(''); }, 15000);
-    ask();
+    const timeout = setTimeout(() => done(null), timeoutMs);
+    // iframe 自身が blob に遷移して HTML を持つので、自身も問い合わせ先に含める
+    const win = iframe?.contentWindow;
+    for (const frame of win ? [win, ...descendants(win)] : []) frame.postMessage({ type: 'morn-gemini-relay:get-canvas', id }, '*');
   });
 }
 
@@ -116,22 +106,28 @@ async function relayAnswer(conversation, before) {
   for (const end = Date.now() + 600000; Date.now() < end; await sleep(300)) {
     const current = lastResponse()?.innerText.trim() || '';
     if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
-    if (current && Date.now() - changed >= 1500) {
-      const htmls = [];
-      const chipCount = lastResponse().querySelectorAll('immersive-entry-chip').length;
-      for (let i = 0; i < chipCount; i++) htmls[i] = await canvasHtml(i);
-      // ponytail: Canvas 取得の原因調査用の一時ログ。動作を確認したら消す。
-      console.warn(`MornGeminiRelay: Canvas 診断 ${JSON.stringify({ chipCount, chipsInDocument: document.querySelectorAll('immersive-entry-chip').length, lengths: htmls.map((html) => html.length), heads: htmls.map((html) => html.slice(0, 40)) })}`);
-      // 待つ間に DOM が作り直されていても最新の回答に書き込む。コード表示中なら canvas.js が同期で Monaco の全文を書き出す。
-      const root = lastResponse();
-      document.dispatchEvent(new CustomEvent('morn-gemini-relay:canvas'));
-      root.querySelectorAll('immersive-entry-chip').forEach((chip, i) => {
-        if (!chip.dataset.mornCode && htmls[i]) Object.assign(chip.dataset, { mornCode: htmls[i], mornLang: 'html' });
-      });
-      return request({ type: 'answer', conversation, ...toMrkdwn(root) });
-    }
+    if (current && Date.now() - changed >= 1500) return request({ type: 'answer', conversation, ...toMrkdwn(lastResponse()) });
   }
   throw new Error('回答の生成が完了しませんでした');
+}
+
+// Canvas は本文の完了後も生成が続き、終わってからプレビューに HTML が載る。
+// そこで本文とは別に回答を見張り、プレビューが HTML を返したらスレッドに追加で投稿する。
+// Angular が要素を作り直しても追えるよう、回答もチップも毎回 index で探し直す。
+async function relayCanvas(conversation, index) {
+  const chips = () => document.querySelectorAll('model-response')[index]?.querySelectorAll('immersive-entry-chip') || [];
+  const finished = new Set();
+  for (const end = Date.now() + 600000; Date.now() < end; await sleep(1000)) {
+    for (let i = 0; i < chips().length; i++) {
+      if (finished.has(i)) continue;
+      const html = await canvasHtml(chips()[i]?.querySelector('iframe'), 2000);
+      if (html === null) continue;
+      finished.add(i); // 送れない理由があった ('' ) 場合も再試行しない
+      if (html) await request({ type: 'canvas', conversation, files: [{ name: `canvas-${i + 1}.html`, content: html }] });
+    }
+    if (chips().length && finished.size === chips().length) return;
+  }
+  if (chips().length) console.warn('MornGeminiRelay: Canvas のコードを 10 分以内に取得できませんでした');
 }
 
 // Enter は IME 確定でも飛ぶので、押下時のテキストを控えて「入力欄が空になった = Gemini が受理した」ときだけ送る
@@ -145,7 +141,8 @@ async function relay() {
     if (!editor.innerText.trim()) {
       const conversation = await conversationId();
       await request({ type: 'prompt', conversation, text, account: account() });
-      return relayAnswer(conversation, before);
+      await relayAnswer(conversation, before);
+      return relayCanvas(conversation, before);
     }
   }
 }

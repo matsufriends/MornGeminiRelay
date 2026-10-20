@@ -26,21 +26,24 @@ function chunkLines(text, limit = 39000) {
   return chunks;
 }
 
-// 会話の最初の投稿を親にし、以降の質問と回答はその ts をスレッドにして返信する。
+// 会話の最初の投稿を親にし、以降の質問・回答・コードはその ts をスレッドにして返信する。
 // コードは files:write を要求しないよう、ファイル添付ではなくスレッド内のコードブロックとして投稿する。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
 function postToSlack(conversation, text, files = []) {
   const post = slackQueue.then(async () => {
     const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
     if (!slackToken || !slackChannel) return;
-    const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: threads[conversation], text: text.slice(0, 39000) });
-    const thread = threads[conversation] || result.ts;
-    // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
-    if (!threads[conversation]) await chrome.storage.local.set({ threads: { ...threads, [conversation]: thread } });
-    for (const file of files) {
-      for (const chunk of chunkLines(escapeSlack(file.content))) {
-        await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: `📎 ${file.name}\n\`\`\`\n${chunk}\n\`\`\`` });
-      }
+    const messages = [
+      ...(text ? [text.slice(0, 39000)] : []),
+      ...files.flatMap((file) => chunkLines(escapeSlack(file.content)).map((chunk) => `📎 ${file.name}\n\`\`\`\n${chunk}\n\`\`\``)),
+    ];
+    let thread = threads[conversation];
+    for (const message of messages) {
+      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: message });
+      if (thread) continue;
+      thread = result.ts;
+      // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
+      await chrome.storage.local.set({ threads: { ...threads, [conversation]: thread } });
     }
   });
   slackQueue = post.catch(() => {});
@@ -66,12 +69,13 @@ async function downloadConversation(conversation, texts) {
 }
 
 async function handleMessage(msg, sender) {
-  if (msg.type === 'prompt' || msg.type === 'answer') {
-    const files = msg.files || [];
-    if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof msg.text !== 'string') throw new Error('不正な転送内容です');
+  if (msg.type === 'prompt' || msg.type === 'answer' || msg.type === 'canvas') {
+    // canvas は本文なしで、回答の後から届く Canvas のコードだけを同じスレッドへ流す
+    const files = msg.files || [], text = msg.type === 'canvas' ? '' : msg.text;
+    if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof text !== 'string') throw new Error('不正な転送内容です');
     if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
     const author = msg.type === 'prompt' ? msg.account || 'unknown' : 'Gemini';
-    await postToSlack(msg.conversation, `*${escapeSlack(author)}*\n${escapeSlack(msg.text)}`, files);
+    await postToSlack(msg.conversation, text && `*${escapeSlack(author)}*\n${escapeSlack(text)}`, files);
     return {};
   }
 

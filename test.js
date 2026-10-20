@@ -54,6 +54,9 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.match(sent[1].body.text, /^📎 code-1.html\n```\nline 0 &lt;p&gt;\n/);
   assert.equal(sent.slice(1).map(({ body }) => body.text.split('\n').slice(2, -1).join('\n')).join('\n'), long.replace(/</g, '&lt;').replace(/>/g, '&gt;'), '分割してもコードを欠落させない');
   assert.ok((await message({ type: 'answer', conversation: 'abc', text: 'x', files: [{ name: '../x', content: 'x' }] })).error);
+  sent.length = 0;
+  await message({ type: 'canvas', conversation: 'abc', files: [{ name: 'canvas-1.html', content: '<html></html>' }] });
+  assert.deepEqual(sent.map(({ body }) => [body.thread_ts, body.text]), [['ts1', '📎 canvas-1.html\n```\n&lt;html&gt;&lt;/html&gt;\n```']], 'Canvas は本文なしでコードだけを同じスレッドへ流す');
   sent.length = 1;
   await message({ type: 'startExport' });
   assert.equal(tabs[0].url, 'https://gemini.google.com/app');
@@ -93,13 +96,12 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const scroller = { parentElement: null, scrollHeight: 10, scrollTop: 0 };
   const document = {
     addEventListener() {},
-    dispatchEvent() {},
     querySelector: () => links[0],
     querySelectorAll: (selector) => selector === 'user-query .query-text' ? [query] : selector === '[data-test-id="conversation"] a' ? links : [],
   };
   scroller.querySelectorAll = () => busy ? [query] : [];
   const context = vm.createContext({
-    document, location: { pathname: '/app' }, URL, console, CustomEvent: class {},
+    document, location: { pathname: '/app' }, URL, console,
     chrome: { runtime: { sendMessage: async () => null } },
     getComputedStyle: (element) => ({ visibility: 'visible', overflowY: element === scroller ? 'auto' : 'visible' }),
     Date: { now: () => now },
@@ -158,20 +160,12 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
       el('LI', {}, el('P', {}, el('STRONG', {}, t('操作性')), t(':')), el('UL', {}, el('LI', {}, t('マウス '), el('CODE', {}, t('A/D'))))),
       el('LI', {}, el('P', {}, t('見た目')))),
     el('CODE-BLOCK', {}, el('DIV', { className: 'code-block-decoration' }, t('HTML'), el('BUTTON', {}, t('コピー'))), el('PRE', {}, el('CODE', { className: 'language-html', innerText: '<p>\n  x\n</p>\n' }))),
-    el('IMMERSIVE-ENTRY-CHIP', { dataset: { mornCode: '<!DOCTYPE html>\n<html></html>', mornLang: 'html' } }, t('Neon Breakout Game コード プレビュー'), el('XAP-CODE-EDITOR', {}, t('見えている行だけ'))),
+    el('IMMERSIVE-ENTRY-CHIP', {}, el('SPAN', {}, t('Neon Breakout Game')), el('BUTTON', {}, t('コード')), el('XAP-CODE-EDITOR', {}, t('見えている行だけ'))),
     el('P', {}, t('以上')));
   assert.deepEqual(copy(vm.runInContext('toMrkdwn', context)(answer)), {
-    text: '\u200B*主な仕様*\u200B\n\n1. \u200B*操作性*\u200B:\n    ◦ マウス `A/D`\n2. 見た目\n\n📎 code-1.html\n\n📎 code-2.html\n\n以上',
-    files: [{ name: 'code-1.html', content: '<p>\n  x\n</p>' }, { name: 'code-2.html', content: '<!DOCTYPE html>\n<html></html>' }],
-  }, '見出し・番号・入れ子の箇条書き・太字・コードを Slack 記法へ変換し、コードブロックと Canvas の全文は別投稿に回す');
-  let canvasListener;
-  const host = { dataset: {} };
-  vm.runInNewContext(fs.readFileSync('canvas.js', 'utf8'), {
-    document: { addEventListener: (type, fn) => { if (type === 'morn-gemini-relay:canvas') canvasListener = fn; } },
-    window: { monaco: { editor: { getEditors: () => [{ getDomNode: () => ({ closest: () => host }), getModel: () => ({ getValue: () => '全 900 行', getLanguageId: () => 'html' }) }] } } },
-  });
-  canvasListener();
-  assert.deepEqual(host.dataset, { mornCode: '全 900 行', mornLang: 'html' }, 'Canvas のコードは描画範囲ではなく Monaco のモデルから全文を取る');
+    text: '\u200B*主な仕様*\u200B\n\n1. \u200B*操作性*\u200B:\n    ◦ マウス `A/D`\n2. 見た目\n\n📎 code-1.html\nNeon Breakout Game\n以上',
+    files: [{ name: 'code-1.html', content: '<p>\n  x\n</p>' }],
+  }, '見出し・番号・入れ子の箇条書き・太字・コードを Slack 記法へ変換し、コードブロックは別投稿に回す。Canvas はタイトルだけ残し、描画途中のエディタは含めない');
   let previewListener;
   const posted = [];
   const injected = '<script data-bard-client-injected="true">(function(){ window.__initial_auth_token = "secret"; })()</script>\n'
@@ -225,5 +219,22 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('relayAnswer("abc", 0)', context);
   assert.deepEqual(copy(relayed), [{ type: 'answer', conversation: 'abc', text: '回答', files: [] }], '生成完了後の回答を 1 回だけ転送する');
   assert.ok(now >= 3200, '停止ボタンが消えてから 1.5 秒待つ');
-  console.log('PASS: Slack スレッド転送・コード投稿・Canvas 全文取得 (コード/プレビュー)・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  // Canvas は本文の後から生成が終わり、プレビューが HTML を返すようになってから送る
+  relayed.length = 0;
+  const listeners = new Set();
+  Object.assign(context, { addEventListener: (type, fn) => listeners.add(fn), removeEventListener: (type, fn) => listeners.delete(fn), clearTimeout() {}, crypto: { randomUUID: () => 'id' + now } });
+  let asked = 0;
+  const previewWindow = { length: 0, postMessage: (msg) => {
+    asked++;
+    if (now < 5000) return; // 生成中は HTML を持つフレームがなく、誰も答えない
+    for (const fn of [...listeners]) fn({ data: { type: 'morn-gemini-relay:canvas', id: msg.id, html: '<html>全文</html>', error: '' } });
+  } };
+  const chip = { querySelector: () => ({ contentWindow: previewWindow }) };
+  document.querySelectorAll = (selector) => selector === 'model-response' ? [{}, { querySelectorAll: () => now < 1000 ? [] : [chip] }] : [];
+  now = 0;
+  tick = () => {};
+  await vm.runInContext('relayCanvas("abc", 1)', context);
+  assert.deepEqual(copy(relayed), [{ type: 'canvas', conversation: 'abc', files: [{ name: 'canvas-1.html', content: '<html>全文</html>' }] }], 'Canvas の生成完了後に全文を 1 回だけ送る');
+  assert.ok(now >= 5000 && asked > 1, '本文の完了後に現れた Canvas も、HTML が返るまで問い合わせ続ける');
+  console.log('PASS: Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
