@@ -6,6 +6,9 @@
   "permissions": ["storage", "tabs", "downloads"],
   "host_permissions": ["https://slack.com/api/*"],
   "background": { "service_worker": "background.js" },
-  "content_scripts": [{ "matches": ["https://gemini.google.com/*"], "js": ["content.js"] }],
+  "content_scripts": [
+    { "matches": ["https://gemini.google.com/*"], "js": ["content.js"] },
+    { "matches": ["https://gemini.google.com/*"], "js": ["canvas.js"], "world": "MAIN" }
+  ],
   "action": { "default_popup": "popup.html" }
 }

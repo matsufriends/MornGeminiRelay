@@ -31,20 +31,28 @@ const wrap = (mark, text) => text.trim() ? `​${mark}${text.trim()}${mark}​` 
 // 回答の DOM を Slack mrkdwn に変換する。コードブロックは本文から外し、添付ファイルとして返す。
 function toMrkdwn(root) {
   const files = [];
+  const addFile = (content, lang) => {
+    if (!content.trim()) return '';
+    lang = lang.trim().toLowerCase();
+    const name = `code-${files.length + 1}.${EXT[lang] || lang.replace(/\W/g, '') || 'txt'}`;
+    files.push({ name, content });
+    return `\n📎 ${name}\n`;
+  };
   const walk = (node, depth) => {
     if (node.nodeType === 3) return node.textContent.replace(/\s+/g, ' ');
-    if (node.nodeType !== 1 || /^(BUTTON|MAT-ICON|SVG|STYLE|SCRIPT)$/.test(node.tagName)) return '';
+    // Canvas のエディタは見えている行しか DOM にないので、本文には入れない
+    if (node.nodeType !== 1 || /^(BUTTON|MAT-ICON|SVG|STYLE|SCRIPT|XAP-CODE-EDITOR)$/.test(node.tagName)) return '';
     const inner = () => [...node.childNodes].map((child) => walk(child, depth)).join('');
     switch (node.tagName) {
+      case 'IMMERSIVE-ENTRY-CHIP': {
+        const editor = node.querySelector('xap-code-editor');
+        return editor?.dataset.mornCode ? addFile(editor.dataset.mornCode, editor.dataset.mornLang || '') : inner();
+      }
       case 'CODE-BLOCK':
       case 'PRE': {
         const code = node.querySelector('code') || node;
-        const content = code.innerText.replace(/\n$/, '');
-        if (!content.trim()) return '';
-        const lang = (code.className.match(/language-([\w#+-]+)/)?.[1] || node.querySelector('.code-block-decoration')?.innerText.split('\n')[0] || '').trim().toLowerCase();
-        const name = `code-${files.length + 1}.${EXT[lang] || lang.replace(/\W/g, '') || 'txt'}`;
-        files.push({ name, content });
-        return `\n📎 ${name}\n`;
+        const lang = code.className.match(/language-([\w#+-]+)/)?.[1] || node.querySelector('.code-block-decoration')?.innerText.split('\n')[0] || '';
+        return addFile(code.innerText.replace(/\n$/, ''), lang);
       }
       case 'P': return `\n${inner().trim()}\n\n`;
       case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6': return `\n${wrap('*', inner())}\n`;
@@ -80,7 +88,10 @@ async function relayAnswer(conversation, before) {
   for (const end = Date.now() + 600000; Date.now() < end; await sleep(300)) {
     const current = lastResponse()?.innerText.trim() || '';
     if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
-    if (current && Date.now() - changed >= 1500) return request({ type: 'answer', conversation, ...toMrkdwn(lastResponse()) });
+    if (current && Date.now() - changed >= 1500) {
+      document.dispatchEvent(new CustomEvent('morn-gemini-relay:canvas')); // canvas.js が同期でコード全文を書き出す
+      return request({ type: 'answer', conversation, ...toMrkdwn(lastResponse()) });
+    }
   }
   throw new Error('回答の生成が完了しませんでした');
 }

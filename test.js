@@ -93,12 +93,13 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const scroller = { parentElement: null, scrollHeight: 10, scrollTop: 0 };
   const document = {
     addEventListener() {},
+    dispatchEvent() {},
     querySelector: () => links[0],
     querySelectorAll: (selector) => selector === 'user-query .query-text' ? [query] : selector === '[data-test-id="conversation"] a' ? links : [],
   };
   scroller.querySelectorAll = () => busy ? [query] : [];
   const context = vm.createContext({
-    document, location: { pathname: '/app' }, URL, console,
+    document, location: { pathname: '/app' }, URL, console, CustomEvent: class {},
     chrome: { runtime: { sendMessage: async () => null } },
     getComputedStyle: (element) => ({ visibility: 'visible', overflowY: element === scroller ? 'auto' : 'visible' }),
     Date: { now: () => now },
@@ -155,11 +156,20 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
       el('LI', {}, el('P', {}, el('STRONG', {}, t('操作性')), t(':')), el('UL', {}, el('LI', {}, t('マウス '), el('CODE', {}, t('A/D'))))),
       el('LI', {}, el('P', {}, t('見た目')))),
     el('CODE-BLOCK', {}, el('DIV', { className: 'code-block-decoration' }, t('HTML'), el('BUTTON', {}, t('コピー'))), el('PRE', {}, el('CODE', { className: 'language-html', innerText: '<p>\n  x\n</p>\n' }))),
+    el('IMMERSIVE-ENTRY-CHIP', {}, t('Neon Breakout Game コード プレビュー'), el('XAP-CODE-EDITOR', { dataset: { mornCode: '<!DOCTYPE html>\n<html></html>', mornLang: 'html' } }, t('見えている行だけ'))),
     el('P', {}, t('以上')));
   assert.deepEqual(copy(vm.runInContext('toMrkdwn', context)(answer)), {
-    text: '\u200B*主な仕様*\u200B\n\n1. \u200B*操作性*\u200B:\n    ◦ マウス `A/D`\n2. 見た目\n\n📎 code-1.html\n\n以上',
-    files: [{ name: 'code-1.html', content: '<p>\n  x\n</p>' }],
-  }, '見出し・番号・入れ子の箇条書き・太字・コードを Slack 記法へ変換し、コードは添付に回す');
+    text: '\u200B*主な仕様*\u200B\n\n1. \u200B*操作性*\u200B:\n    ◦ マウス `A/D`\n2. 見た目\n\n📎 code-1.html\n\n📎 code-2.html\n\n以上',
+    files: [{ name: 'code-1.html', content: '<p>\n  x\n</p>' }, { name: 'code-2.html', content: '<!DOCTYPE html>\n<html></html>' }],
+  }, '見出し・番号・入れ子の箇条書き・太字・コードを Slack 記法へ変換し、コードブロックと Canvas の全文は別投稿に回す');
+  let canvasListener;
+  const host = { dataset: {} };
+  vm.runInNewContext(fs.readFileSync('canvas.js', 'utf8'), {
+    document: { addEventListener: (type, fn) => { if (type === 'morn-gemini-relay:canvas') canvasListener = fn; } },
+    window: { monaco: { editor: { getEditors: () => [{ getDomNode: () => ({ closest: () => host }), getModel: () => ({ getValue: () => '全 900 行', getLanguageId: () => 'html' }) }] } } },
+  });
+  canvasListener();
+  assert.deepEqual(host.dataset, { mornCode: '全 900 行', mornLang: 'html' }, 'Canvas のコードは描画範囲ではなく Monaco のモデルから全文を取る');
   document.querySelectorAll = (selector) => selector === 'model-response' ? [{ querySelector: () => el('MESSAGE-CONTENT', {}, t(now < 1000 ? '途中' : '回答')) }] : [];
   document.querySelector = () => stopping ? {} : null;
   now = 0;
@@ -167,5 +177,5 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('relayAnswer("abc", 0)', context);
   assert.deepEqual(copy(relayed), [{ type: 'answer', conversation: 'abc', text: '回答', files: [] }], '生成完了後の回答を 1 回だけ転送する');
   assert.ok(now >= 3200, '停止ボタンが消えてから 1.5 秒待つ');
-  console.log('PASS: Slack スレッド転送・コード投稿・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  console.log('PASS: Slack スレッド転送・コード投稿・Canvas 全文取得・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
