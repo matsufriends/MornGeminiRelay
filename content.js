@@ -220,11 +220,14 @@ async function settle(read, advance, root) {
   throw new Error('読み込みが完了しませんでした。保存を停止しました');
 }
 
+// 質問ブロックの本文 (画面読み上げ用の「あなたのプロンプト」などは含めない)
+function queryText(query) {
+  const lines = [...query.querySelectorAll('.query-text-line')];
+  return (lines.length ? lines.map((line) => line.innerText).join('\n') : query.innerText).trim();
+}
+
 function scrapeQueries() {
-  return [...document.querySelectorAll('user-query .query-text')].filter(visible).map((query) => {
-    const lines = [...query.querySelectorAll('.query-text-line')];
-    return (lines.length ? lines.map((line) => line.innerText).join('\n') : query.innerText).trim();
-  }).filter(Boolean);
+  return [...document.querySelectorAll('user-query .query-text')].filter(visible).map(queryText).filter(Boolean);
 }
 
 async function collectConversations() {
@@ -243,12 +246,43 @@ async function collectConversations() {
   return [...conversations.values()];
 }
 
+// 開いている会話を最初から読み、リアルタイム転送と同じ形式 (質問 → 回答 → Canvas) で Slack の新しいスレッドへ送る。
+// ponytail: Slack の投稿レート (1 秒 1 件程度) に合わせて 1 秒ずつ間を空ける。長い会話は送り終えるまで時間がかかる。
+async function sendConversation() {
+  await waitFor(() => document.querySelector('user-query'), '質問が見つからないため送信を停止しました');
+  const scroller = document.querySelector('infinite-scroller');
+  await settle(() => String(document.querySelectorAll('user-query').length), () => { if (scroller) scroller.scrollTop = 0; }, scroller || document);
+  const conversation = await conversationId();
+  const queries = [...document.querySelectorAll('user-query')];
+  for (const [i, query] of queries.entries()) {
+    await request({ type: 'prompt', conversation, text: queryText(query.querySelector('.query-text') || query), account: account(), attachments: attachments(query), newThread: i === 0 });
+    await sleep(1000);
+    const response = query.closest('.conversation-container')?.querySelector('model-response');
+    if (!response) continue;
+    await request({ type: 'answer', conversation, ...toMrkdwn(response.querySelector('message-content') || response) });
+    await sleep(1000);
+    const index = [...document.querySelectorAll('model-response')].indexOf(response);
+    for (const [c, chip] of [...response.querySelectorAll('immersive-entry-chip')].entries()) {
+      // 画面外の Canvas はプレビューが読み込まれないことがあるので、見える位置へ動かしてから問い合わせる
+      chip.scrollIntoView?.({ block: 'center' });
+      const html = await canvasHtml(index, c, 15000);
+      if (!html) continue;
+      await request({ type: 'canvas', conversation, files: [{ name: `canvas-${c + 1}.html`, content: html }] });
+      await sleep(1000);
+    }
+  }
+}
+
 async function exportCurrentPage() {
   const job = await request({ type: 'getExportJob' });
   if (!job || job.done || job.error) return;
   let response;
   if (job.queue === null) {
     response = await request({ type: 'exportQueue', queue: await collectConversations() });
+  } else if (job.mode === 'send') {
+    if (new URL(job.queue[0].href).pathname !== location.pathname) throw new Error('送信中にページが変わりました。もう一度開始してください');
+    await sendConversation();
+    response = await request({ type: 'exportSent' });
   } else {
     if (new URL(job.queue[0].href).pathname !== location.pathname) throw new Error('保存中にページが変わりました。もう一度開始してください');
     await waitFor(() => scrapeQueries().length, '質問本文が見つからないため保存を停止しました');

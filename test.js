@@ -8,6 +8,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const local = { slackToken: 'xoxb-test', slackChannel: 'C1', webhook: 'https://discord.com/api/webhooks/example', history: [{ text: '旧履歴' }], importQueue: ['old'], importTotal: 1 };
   const session = {}, downloads = [], tabs = [], sent = [];
   let listener, onRemoved, state = 'complete', nextId = 1;
+  const removed = [];
   const storage = (data) => ({
     get: async (keys) => Object.fromEntries([].concat(keys).map((key) => [key, copy(data[key])])),
     set: async (values) => Object.assign(data, copy(values)),
@@ -20,6 +21,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
       create: async (options) => { const tab = { ...options, id: nextId++ }; tabs.push(tab); return tab; },
       update: async (id, options) => Object.assign(tabs.find((tab) => tab.id === id), options),
       onRemoved: { addListener: (fn) => { onRemoved = fn; } },
+      remove: async (id) => { removed.push(id); await onRemoved(id); },
     },
     downloads: {
       download: async (options) => { downloads.push(options); return downloads.length; },
@@ -100,6 +102,32 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.match((await message({ type: 'startExport' })).error, /タブを開けません/);
   assert.equal(session.exportJob, undefined, '起動失敗時も再試行できる');
   chrome.tabs.update = update;
+
+  // 全チャット取得: 一覧だけを控えて専用タブを閉じる
+  const downloaded = downloads.length;
+  await message({ type: 'startExport', mode: 'list' });
+  const listTab = { tab: { id: tabs.at(-1).id }, url: 'https://gemini.google.com/app' };
+  assert.equal(tabs.at(-1).url, 'https://gemini.google.com/app');
+  await message({ type: 'exportQueue', queue: [{ href: 'https://gemini.google.com/app/abc', title: 'ブロック崩し' }] }, listTab);
+  assert.deepEqual(session.chatList, [{ href: 'https://gemini.google.com/app/abc', title: 'ブロック崩し' }], '取得した一覧をプルダウン用に控える');
+  assert.deepEqual([removed.at(-1), session.exportJob, session.lastResult], [listTab.tab.id, undefined, '1 件の会話を取得しました'], '取得後は専用タブを閉じて結果を残す');
+  assert.equal(downloads.length, downloaded, '一覧の取得ではダウンロードしない');
+  assert.ok((await message({ type: 'startExport', mode: 'send', chat: { href: 'https://example.com/app/abc', title: 'x' } })).error, 'Gemini 以外の URL は送信対象にしない');
+
+  // チャット送信: 選んだ会話を開き、最初の質問で既存スレッドとは別の新しいスレッドを作る
+  sent.length = 5;
+  await message({ type: 'startExport', mode: 'send', chat: session.chatList[0] });
+  const sendTab = { tab: { id: tabs.at(-1).id }, url: 'https://gemini.google.com/app/abc' };
+  assert.equal(tabs.at(-1).url, 'https://gemini.google.com/app/abc', '選んだ会話を専用タブで開く');
+  assert.equal(local.threads.abc, 'ts1', '送信前は既存のスレッドがある');
+  await message({ type: 'prompt', conversation: 'abc', text: '最初の質問', account: 'me', newThread: true }, sendTab);
+  await message({ type: 'answer', conversation: 'abc', text: '最初の回答' }, sendTab);
+  assert.deepEqual(sent.slice(5).map(({ body }) => body.thread_ts), [undefined, 'ts6'], '既存スレッドに足さず、新しい親投稿の下へ続ける');
+  assert.equal(local.threads.abc, 'ts6', '対応表を新しいスレッドに置き換える');
+  await message({ type: 'prompt', conversation: 'abc', text: '', account: 'me', attachments: ['画像'] }, sendTab);
+  assert.equal(sent[7].body.text, '> 🧑‍💻 \u200B*me*\u200B\n\n📎 添付: 画像', '本文のない添付だけの質問も送る');
+  await message({ type: 'exportSent' }, sendTab);
+  assert.deepEqual([removed.at(-1), session.lastResult], [sendTab.tab.id, '「ブロック崩し」を Slack に送信しました'], '送信後は専用タブを閉じて結果を残す');
 
   let now = 0, tick = () => {}, busy = false, links = [];
   const query = { getClientRects: () => [{}], innerText: 'fallback', querySelectorAll: () => [] };
@@ -289,5 +317,5 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('relay()', context).catch(() => {});
   await second;
   assert.deepEqual(copy(relayed.filter((msg) => msg.type === 'prompt')).map((msg) => msg.text), ['確定後'], '二重に押しても 1 回だけ、確定後の文字で送る。検知中の押下は期限を延ばし、取りこぼさない');
-  console.log('PASS: 二重送信の防止・Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  console.log('PASS: 全チャット取得・チャット送信 (新しいスレッド)・二重送信の防止・Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -6,10 +6,11 @@
   body { width: 320px; margin: 0; padding: var(--edge); font: 13px sans-serif; }
   label { display: block; margin-bottom: var(--gap); }
   .slack-row { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
-  input, button { font: inherit; padding: var(--panel); }
-  input { flex: 1; min-width: 0; }
+  input, button, select { font: inherit; padding: var(--panel); }
+  input, select { flex: 1; min-width: 0; }
   button:enabled { cursor: pointer; }
-  #export { width: 100%; margin-top: var(--section); }
+  #list, #export { width: 100%; margin-top: var(--section); }
+  #list + .slack-row { margin-top: var(--gap); }
   #status { margin-top: var(--gap); overflow-wrap: anywhere; }
   @media (hover: hover) { button:enabled:hover { filter: brightness(0.9); } }
 </style>
@@ -24,6 +25,11 @@
 <div class="slack-row">
   <input id="nickname" placeholder="空欄なら Google アカウント名">
   <button id="save">保存</button>
+</div>
+<button id="list">全チャットを取得</button>
+<div class="slack-row">
+  <select id="chat" aria-label="Slack に送るチャット" disabled><option>先に全チャットを取得してください</option></select>
+  <button id="send" disabled>送信</button>
 </div>
 <button id="export">Gemini を開いて履歴を保存</button>
 <div id="status" role="status"></div>

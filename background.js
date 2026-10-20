@@ -19,11 +19,12 @@ async function slackApi(token, method, params) {
 // 会話の最初の投稿を親にし、以降の質問・回答はその ts をスレッドにして返信する。
 // コードは長くても 1 つにまとまり折りたたまれるよう、ファイルとして同じスレッドに添付する (files:write が必要)。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
-function postToSlack(conversation, text, files = []) {
+// fresh なら既存のスレッドを使わず、新しい親投稿を作って対応表を置き換える (チャットを丸ごと送り直すとき)。
+function postToSlack(conversation, text, files = [], fresh = false) {
   const post = slackQueue.then(async () => {
     const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
     if (!slackToken || !slackChannel) return;
-    let thread = threads[conversation];
+    let thread = fresh ? undefined : threads[conversation];
     if (text) {
       const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000) });
       if (!thread) {
@@ -81,7 +82,7 @@ async function handleMessage(msg, sender) {
     // 添付は名前だけを知らせる (中身は送らない)
     const attached = Array.isArray(msg.attachments) ? msg.attachments.filter((name) => typeof name === 'string' && name).map((name) => name.slice(0, 200)) : [];
     const note = attached.length ? `\n📎 添付: ${escapeSlack(attached.join(', '))}` : '';
-    await postToSlack(msg.conversation, text && `> ${author}\n${escapeSlack(text)}${note}`, files);
+    await postToSlack(msg.conversation, msg.type === 'canvas' ? '' : `> ${author}\n${escapeSlack(text)}${note}`, files, msg.type === 'prompt' && msg.newThread === true);
     return {};
   }
 
@@ -92,11 +93,14 @@ async function handleMessage(msg, sender) {
       await chrome.tabs.update(exportJob.tabId, { active: true });
       return {};
     }
+    // download: 全会話を .md に保存 / list: 会話一覧だけを取得 / send: 選んだ会話を Slack の新しいスレッドへ送る
+    const mode = ['list', 'send'].includes(msg.mode) ? msg.mode : 'download';
+    const chat = mode === 'send' ? validChat(msg.chat) : null;
     // 空タブで ID を確定してから Gemini を開き、ページ読み込みとの競合を避ける。
     const tab = await chrome.tabs.create({ url: 'about:blank' });
-    await chrome.storage.session.set({ exportJob: { tabId: tab.id, queue: null, total: 0, saved: 0 } });
+    await chrome.storage.session.set({ exportJob: { tabId: tab.id, mode, queue: chat ? [chat] : null, total: chat ? 1 : 0, saved: 0 } });
     try {
-      await chrome.tabs.update(tab.id, { url: 'https://gemini.google.com/app' });
+      await chrome.tabs.update(tab.id, { url: chat?.href || 'https://gemini.google.com/app' });
     } catch (error) {
       await chrome.storage.session.remove('exportJob');
       throw error;
@@ -114,13 +118,17 @@ async function handleMessage(msg, sender) {
   if (msg.type === 'exportQueue') {
     if (exportJob.queue !== null || !Array.isArray(msg.queue) || !msg.queue.length) throw new Error('会話一覧を取得できませんでした');
     const seen = new Set();
-    exportJob.queue = msg.queue.map(({ href, title }) => {
-      const url = new URL(href);
-      if (url.origin !== 'https://gemini.google.com' || !/^\/(?:u\/\d+\/)?app\/[^/]+$/.test(url.pathname) || typeof title !== 'string' || seen.has(href)) throw new Error('会話 URL が不正です');
-      seen.add(href);
-      return { href, title };
+    exportJob.queue = msg.queue.map((chat) => {
+      if (seen.has(chat?.href)) throw new Error('会話 URL が不正です');
+      seen.add(chat.href);
+      return validChat(chat);
     });
     exportJob.total = exportJob.queue.length;
+    if (exportJob.mode === 'list') return finishJob(exportJob, `${exportJob.total} 件の会話を取得しました`, { chatList: exportJob.queue });
+  } else if (msg.type === 'exportSent') {
+    const current = exportJob.queue?.[0];
+    if (exportJob.mode !== 'send' || !current || new URL(sender.url).pathname !== new URL(current.href).pathname) throw new Error('送信中の会話ではありません');
+    return finishJob(exportJob, `「${current.title}」を Slack に送信しました`);
   } else if (msg.type === 'exportConversation') {
     const current = exportJob.queue?.[0];
     if (!current || new URL(sender.url).pathname !== new URL(current.href).pathname || !Array.isArray(msg.texts) || !msg.texts.length || !msg.texts.every((text) => typeof text === 'string' && text.trim())) throw new Error('会話の本文を取得できませんでした');
@@ -136,6 +144,20 @@ async function handleMessage(msg, sender) {
   // メモリ上に作業中の URL と進捗だけを置く。質問本文は保存しない。
   await chrome.storage.session.set({ exportJob });
   return { next: exportJob.queue[0]?.href };
+}
+
+// 一覧の取得と会話の送信は 1 回で終わるので、結果を残して専用タブを閉じる。
+// ponytail: 会話一覧 (URL とタイトル) はセッション中だけメモリに置く。ブラウザを閉じたら取り直す。
+async function finishJob(exportJob, message, values = {}) {
+  await chrome.storage.session.set({ ...values, lastResult: message });
+  await chrome.tabs.remove(exportJob.tabId).catch(() => {});
+  return {};
+}
+
+function validChat(chat) {
+  const url = new URL(chat?.href);
+  if (url.origin !== 'https://gemini.google.com' || !/^\/(?:u\/\d+\/)?app\/[^/]+$/.test(url.pathname) || typeof chat.title !== 'string') throw new Error('会話 URL が不正です');
+  return { href: chat.href, title: chat.title };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
