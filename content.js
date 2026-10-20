@@ -18,10 +18,10 @@ async function conversationId() {
 }
 
 // 送信済みの質問に付いた添付の名前。中身は送らず、添付があったことだけを知らせる。
-// 画像などファイル名が表示されないものは、ボタンのラベルや代替テキストで代用する。
+// 画像はファイル名が表示されず、ボタンのラベルも「…ライトボックスに表示」という操作名なので「画像」とだけ示す。
 function attachments(query) {
   return [...(query?.querySelectorAll('user-query-file-preview') || [])].map((preview) =>
-    preview.querySelector('.filename-label')?.innerText.trim() || preview.querySelector('button')?.getAttribute('aria-label')?.trim() || preview.querySelector('img')?.alt?.trim() || 'ファイル');
+    preview.querySelector('.filename-label')?.innerText.trim() || (preview.querySelector('img') ? '画像' : 'ファイル'));
 }
 
 const STOP_BTN ='button[aria-label*="停止"], button[aria-label*="Stop" i]';

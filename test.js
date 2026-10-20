@@ -173,8 +173,8 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const preview_ = (props, ...children) => el('USER-QUERY-FILE-PREVIEW', props, ...children);
   assert.deepEqual(copy(vm.runInContext('attachments', context)(el('USER-QUERY', {},
     preview_({}, el('BUTTON', {}, el('DIV', { className: 'filename-label', innerText: ' Scripts ' }))),
-    preview_({}, el('BUTTON', { 'aria-label': 'photo.png' }, el('IMG', { alt: '' }))),
-    preview_({}, el('IMG', { alt: '' }))))), ['Scripts', 'photo.png', 'ファイル'], '添付の名前を表示名・ラベルの順に拾い、なければ「ファイル」とする');
+    preview_({}, el('BUTTON', { 'aria-label': 'アップロードした画像をライトボックスに表示' }, el('IMG', { alt: '' }))),
+    preview_({}, el('DIV', {}))))), ['Scripts', '画像', 'ファイル'], '添付は表示名を使い、名前のない画像は操作名ではなく「画像」とする');
   assert.deepEqual(copy(vm.runInContext('attachments', context)(undefined)), [], '質問が描画されなければ添付なし');
   let previewListener;
   const posted = [];
