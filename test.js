@@ -266,5 +266,22 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('relayCanvas("abc", 1)', context);
   assert.deepEqual(copy(relayed), [{ type: 'canvas', conversation: 'abc', files: [{ name: 'canvas-1.html', content: '<html>全文</html>' }] }], 'Canvas の生成完了後に全文を 1 回だけ送る');
   assert.ok(now >= 5000 && asked > 1, '本文の完了後に現れた Canvas も、HTML が返るまで問い合わせ続ける');
-  console.log('PASS: Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  // IME 確定の Enter と送信の Enter が続いても、質問は 1 回だけ送る
+  relayed.length = 0;
+  const editor = { innerText: '確定前', closest: () => editor };
+  document.querySelector = (selector) => selector === '.ql-editor' ? editor : null;
+  document.querySelectorAll = () => [];
+  context.location.pathname = '/app/abc';
+  now = 0;
+  let second;
+  tick = (time) => {
+    if (time >= 300 && time < 1800) editor.innerText = '確定後';
+    // 1 回目の検知期限 (1500ms) の直前に 2 回目の Enter を押し、期限を過ぎてから入力欄が空になる
+    if (time >= 1350 && !second) second = vm.runInContext('relay()', context).catch(() => {});
+    if (time >= 1800) editor.innerText = '';
+  };
+  await vm.runInContext('relay()', context).catch(() => {});
+  await second;
+  assert.deepEqual(copy(relayed.filter((msg) => msg.type === 'prompt')).map((msg) => msg.text), ['確定後'], '二重に押しても 1 回だけ、確定後の文字で送る。検知中の押下は期限を延ばし、取りこぼさない');
+  console.log('PASS: 二重送信の防止・Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

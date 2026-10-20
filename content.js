@@ -145,25 +145,35 @@ async function relayCanvas(conversation, index) {
   if (chips().length) console.warn('MornGeminiRelay: Canvas のコードを 10 分以内に取得できませんでした');
 }
 
-// Enter は IME 確定でも飛ぶので、押下時のテキストを控えて「入力欄が空になった = Gemini が受理した」ときだけ送る
+// Enter は IME 確定でも飛ぶので、押下時のテキストを控えて「入力欄が空になった = Gemini が受理した」ときだけ送る。
+// IME 確定の Enter → 送信の Enter や、Enter と送信ボタンが続くと検知が並走して二重送信になるので、
+// 検知中の押下は新たに検知せず、検知の期限を延ばすだけにする。
+let detectUntil = 0;
 async function relay() {
   const editor = document.querySelector('.ql-editor');
-  const text = editor?.innerText.trim();
+  let text = editor?.innerText.trim();
   if (!text) return;
+  const detecting = Date.now() < detectUntil;
+  detectUntil = Date.now() + 1500;
+  if (detecting) return;
   const before = document.querySelectorAll('model-response').length;
   const queries = document.querySelectorAll('user-query').length;
-  for (let i = 0; i < 10; i++) {
+  let sent = false;
+  while (!sent && Date.now() < detectUntil) {
     await sleep(150);
-    if (!editor.innerText.trim()) {
-      const conversation = await conversationId();
-      // 添付は送信後の質問に表示されるので、新しい質問が描画されるのを待って読む (出なければ添付なし扱い)
-      await waitFor(() => document.querySelectorAll('user-query').length > queries, '').catch(() => {});
-      const query = document.querySelectorAll('user-query')[queries];
-      await request({ type: 'prompt', conversation, text, account: account(), attachments: attachments(query) });
-      await relayAnswer(conversation, before);
-      return relayCanvas(conversation, before);
-    }
+    sent = !editor.innerText.trim();
+    // 検知中に IME で確定した文字も含めるよう、空になる直前の内容を控え直す
+    if (!sent) text = editor.innerText.trim();
   }
+  detectUntil = 0;
+  if (!sent) return;
+  const conversation = await conversationId();
+  // 添付は送信後の質問に表示されるので、新しい質問が描画されるのを待って読む (出なければ添付なし扱い)
+  await waitFor(() => document.querySelectorAll('user-query').length > queries, '').catch(() => {});
+  const query = document.querySelectorAll('user-query')[queries];
+  await request({ type: 'prompt', conversation, text, account: account(), attachments: attachments(query) });
+  await relayAnswer(conversation, before);
+  return relayCanvas(conversation, before);
 }
 
 document.addEventListener('keydown', (e) => {
