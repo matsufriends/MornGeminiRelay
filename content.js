@@ -255,11 +255,15 @@ async function sendConversation() {
   const conversation = await conversationId();
   const queries = [...document.querySelectorAll('user-query')];
   for (const [i, query] of queries.entries()) {
+    // Gemini は画面外のやり取りの中身を描画しないので、見える位置へ動かし、質問と回答が描画されるまで (最大 3 秒) 待つ
+    query.scrollIntoView?.({ block: 'center' });
+    const response = query.closest('.conversation-container')?.querySelector('model-response');
+    const answerRoot = () => response?.querySelector('message-content') || response;
+    for (let t = 0; t < 30 && !(queryText(query.querySelector('.query-text') || query) && (!response || answerRoot().innerText.trim())); t++) await sleep(100);
     await request({ type: 'prompt', conversation, text: queryText(query.querySelector('.query-text') || query), account: account(), attachments: attachments(query), newThread: i === 0 });
     await sleep(1000);
-    const response = query.closest('.conversation-container')?.querySelector('model-response');
     if (!response) continue;
-    await request({ type: 'answer', conversation, ...toMrkdwn(response.querySelector('message-content') || response) });
+    await request({ type: 'answer', conversation, ...toMrkdwn(answerRoot()) });
     await sleep(1000);
     const index = [...document.querySelectorAll('model-response')].indexOf(response);
     for (const [c, chip] of [...response.querySelectorAll('immersive-entry-chip')].entries()) {
