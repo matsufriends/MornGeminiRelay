@@ -9,7 +9,7 @@ Gemini (gemini.google.com) に投げた質問と回答を Slack のスレッド�
    - Bot Token Scopes に `chat:write` と `files:write` を追加してワークスペースにインストールし、Bot User OAuth Token (`xoxb-…`) を控える
    - 投稿先チャンネルで `/invite @<App 名>` を実行する (招待せずに公開チャンネルへ投稿するなら `chat:write.public` も追加)
    - チャンネル詳細の最下部にあるチャンネル ID (`C…`) を控える
-3. 拡張機能に Bot Token とチャンネル ID を入力し、「保存」を押す
+3. 拡張機能に Bot Token とチャンネル ID を入力し、「保存」を押す。Slack での自分の表示名を変えたい場合は「Slack での表示名」も入力する (「表示名 (メール)」で表示される。空欄なら「Google アカウント名 (メール)」)
 
 ## 質問履歴を保存
 
@@ -29,7 +29,7 @@ Gemini の画面に読み込める会話が対象。DOM の更新停止を 800ms
 
 Incoming Webhook は投稿の `ts` を返さず親投稿のスレッドに返信できないため、Bot Token で `chat.postMessage` を使う。
 
-拡張機能は質問本文を蓄積しない。永続保存するのは Bot Token・チャンネル ID と、会話 ID → 親投稿 `ts` の対応表のみ。作業中の会話 URL・タイトルと進捗だけを `chrome.storage.session` のメモリ上に保持し、本文は `.md` に直接出力する。タブを閉じると作業情報も削除する。旧版で保持していた質問履歴・取り込み情報・Discord Webhook URL は、更新後に拡張機能が起動すると削除する。
+拡張機能は質問本文を蓄積しない。永続保存するのは Bot Token・チャンネル ID・表示名と、会話 ID → 親投稿 `ts` の対応表のみ。作業中の会話 URL・タイトルと進捗だけを `chrome.storage.session` のメモリ上に保持し、本文は `.md` に直接出力する。タブを閉じると作業情報も削除する。旧版で保持していた質問履歴・取り込み情報・Discord Webhook URL は、更新後に拡張機能が起動すると削除する。
 
 ## チェック
 

@@ -48,6 +48,12 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   sent.length = 0;
   await message({ type: 'prompt', conversation: 'abc', text: '分析して', account: 'me', attachments: ['Scripts', 'a<b>.png'] });
   assert.equal(sent[0].body.text, '> 🧑‍💻 \u200B*me*\u200B\n分析して\n📎 添付: Scripts, a&lt;b&gt;.png', '添付は名前だけを知らせる');
+  local.nickname = 'もーん<3';
+  await message({ type: 'prompt', conversation: 'abc', text: 'こんにちは', account: 'Atsuya Matsutomo (atsuya@example.com)' });
+  assert.equal(sent[1].body.text, '> 🧑‍💻 \u200B*もーん&lt;3 (atsuya@example.com)*\u200B\nこんにちは', 'ニックネームを設定すればアカウント名の代わりに「ニックネーム (メール)」で表示する');
+  await message({ type: 'prompt', conversation: 'abc', text: 'メールなし', account: 'me' });
+  assert.equal(sent[2].body.text, '> 🧑‍💻 \u200B*もーん&lt;3*\u200B\nメールなし', 'メールが取れなければニックネームだけ');
+  delete local.nickname;
   assert.ok((await message({ type: 'prompt', conversation: '../x', text: 'x' })).error);
   assert.equal(JSON.stringify(local).includes('新しい質問'), false, 'Slack 転送で本文を蓄積しない');
   sent.length = 0;

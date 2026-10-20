@@ -73,7 +73,11 @@ async function handleMessage(msg, sender) {
     if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
     // 同じ Bot が投稿するので、名前の行を Slack の引用 (左の縦線) にして自分と Gemini を見分けられるようにする。
     // Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る。
-    const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(msg.account || 'unknown')}*\u200B` : '✨ \u200B*Gemini*\u200B';
+    // 自分の名前はポップアップで設定したニックネームを優先して「ニックネーム (メール)」にし、未設定なら「Google アカウント名 (メール)」のまま
+    const { nickname } = await chrome.storage.local.get('nickname');
+    const email = msg.account?.match(/\(([^()]+@[^()]+)\)/)?.[1];
+    const me = nickname ? (email ? `${nickname} (${email})` : nickname) : msg.account || 'unknown';
+    const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(me)}*\u200B` : '✨ \u200B*Gemini*\u200B';
     // 添付は名前だけを知らせる (中身は送らない)
     const attached = Array.isArray(msg.attachments) ? msg.attachments.filter((name) => typeof name === 'string' && name).map((name) => name.slice(0, 200)) : [];
     const note = attached.length ? `\n📎 添付: ${escapeSlack(attached.join(', '))}` : '';
