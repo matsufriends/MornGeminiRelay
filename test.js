@@ -221,14 +221,22 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.ok(now >= 3200, '停止ボタンが消えてから 1.5 秒待つ');
   // Canvas は本文の後から生成が終わり、プレビューが HTML を返すようになってから送る
   relayed.length = 0;
-  const listeners = new Set();
-  Object.assign(context, { addEventListener: (type, fn) => listeners.add(fn), removeEventListener: (type, fn) => listeners.delete(fn), clearTimeout() {}, crypto: { randomUUID: () => 'id' + now } });
-  let asked = 0;
+  // ページ側の canvas-bridge.js と content.js を同じ document でつなぐ
+  const domListeners = {};
+  Object.assign(document, {
+    addEventListener: (type, fn) => (domListeners[type] ||= new Set()).add(fn),
+    removeEventListener: (type, fn) => domListeners[type]?.delete(fn),
+    dispatchEvent: (event) => { for (const fn of [...(domListeners[event.type] || [])]) fn(event); },
+  });
+  class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } }
+  Object.assign(context, { CustomEvent, clearTimeout() {}, crypto: { randomUUID: () => 'id' + now } });
+  let asked = 0, bridgeMessage;
   const previewWindow = { length: 0, postMessage: (msg) => {
     asked++;
     if (now < 5000) return; // 生成中は HTML を持つフレームがなく、誰も答えない
-    for (const fn of [...listeners]) fn({ data: { type: 'morn-gemini-relay:canvas', id: msg.id, html: '<html>全文</html>', error: '' } });
+    bridgeMessage({ data: { type: 'morn-gemini-relay:canvas', id: msg.id, html: '<html>全文</html>', error: '' } });
   } };
+  vm.runInNewContext(fs.readFileSync('canvas-bridge.js', 'utf8'), { document, CustomEvent, addEventListener: (type, fn) => { bridgeMessage = fn; } });
   const chip = { querySelector: () => ({ contentWindow: previewWindow }) };
   document.querySelectorAll = (selector) => selector === 'model-response' ? [{}, { querySelectorAll: () => now < 1000 ? [] : [chip] }] : [];
   now = 0;

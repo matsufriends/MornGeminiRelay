@@ -77,25 +77,21 @@ function toMrkdwn(root) {
   return { text, files };
 }
 
-// 子孫フレームを列挙する。cross-origin でも length と添字アクセスは許可されている。
-const descendants = (win, depth = 3) => depth ? Array.from({ length: win.length }, (_, i) => win[i]).flatMap((child) => [child, ...descendants(child, depth - 1)]) : [];
-
-// Canvas の iframe とその配下のフレームで動く preview.js に HTML を問い合わせる。
+// Canvas のプレビューに HTML を問い合わせる。実際の問い合わせはページ側の canvas-bridge.js が行い、返事を DOM イベントで返す。
 // HTML を持つフレームだけが答えるので、timeoutMs 以内に返事がなければ null (まだ生成中・読み込み中)。
-function canvasHtml(iframe, timeoutMs) {
+function canvasHtml(response, chip, timeoutMs) {
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
-    const done = (html) => { removeEventListener('message', onMessage); clearTimeout(timeout); resolve(html); };
-    const onMessage = (event) => {
-      if (event.data?.type !== 'morn-gemini-relay:canvas' || event.data.id !== id) return;
-      if (event.data.error) console.warn(`MornGeminiRelay: Canvas のコードを送れません: ${event.data.error}`);
-      done(event.data.html);
+    const done = (html) => { document.removeEventListener('morn-gemini-relay:canvas', onReply); clearTimeout(timeout); resolve(html); };
+    const onReply = (event) => {
+      const reply = JSON.parse(event.detail);
+      if (reply.id !== id) return;
+      if (reply.error) console.warn(`MornGeminiRelay: Canvas のコードを送れません: ${reply.error}`);
+      done(reply.html);
     };
-    addEventListener('message', onMessage);
+    document.addEventListener('morn-gemini-relay:canvas', onReply);
     const timeout = setTimeout(() => done(null), timeoutMs);
-    // iframe 自身が blob に遷移して HTML を持つので、自身も問い合わせ先に含める
-    const win = iframe?.contentWindow;
-    for (const frame of win ? [win, ...descendants(win)] : []) frame.postMessage({ type: 'morn-gemini-relay:get-canvas', id }, '*');
+    document.dispatchEvent(new CustomEvent('morn-gemini-relay:ask-canvas', { detail: JSON.stringify({ id, response, chip }) }));
   });
 }
 
@@ -120,7 +116,7 @@ async function relayCanvas(conversation, index) {
   for (const end = Date.now() + 600000; Date.now() < end; await sleep(1000)) {
     for (let i = 0; i < chips().length; i++) {
       if (finished.has(i)) continue;
-      const html = await canvasHtml(chips()[i]?.querySelector('iframe'), 2000);
+      const html = await canvasHtml(index, i, 2000);
       if (html === null) continue;
       finished.add(i); // 送れない理由があった ('' ) 場合も再試行しない
       if (html) await request({ type: 'canvas', conversation, files: [{ name: `canvas-${i + 1}.html`, content: html }] });
