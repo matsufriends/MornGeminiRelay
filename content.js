@@ -102,7 +102,7 @@ function canvasHtml(index) {
     };
     addEventListener('message', onMessage);
     const timer = setInterval(ask, 500);
-    const timeout = setTimeout(() => { console.warn('MornGeminiRelay: Canvas のコードを取得できませんでした', JSON.stringify(log)); done(''); }, 15000);
+    const timeout = setTimeout(() => { console.warn(`MornGeminiRelay: Canvas のコードを取得できませんでした ${JSON.stringify(log)}`); done(''); }, 15000);
     ask();
   });
 }
