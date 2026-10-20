@@ -4,7 +4,7 @@ chrome.storage.local.remove(['history', 'importQueue', 'importTotal', 'webhook']
 const escapeSlack = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 let slackQueue = Promise.resolve();
 
-// undefined の項目 (親投稿時の thread_ts) は送らない
+// files.getUploadURLExternal が JSON を受け付けないため、全メソッドをフォーム形式で呼ぶ。undefined の項目 (親投稿時の thread_ts) は送らない。
 async function slackApi(token, method, params) {
   const response = await fetch(`https://slack.com/api/${method}`, {
     method: 'POST',
@@ -16,36 +16,32 @@ async function slackApi(token, method, params) {
   return result;
 }
 
-// 行の途中で切らずに分割する。Slack は 4,000 文字を超える本文の書式を崩す (``` がコードブロックにならない) ので、
-// 見出しと ``` の分を残して 1 通 3,900 文字以内に収める。
-function chunkLines(text, limit = 3900) {
-  const chunks = [''];
-  for (const line of text.split('\n')) {
-    if (chunks[chunks.length - 1].length + line.length + 1 > limit) chunks.push('');
-    chunks[chunks.length - 1] += (chunks[chunks.length - 1] ? '\n' : '') + line.slice(0, limit);
-  }
-  return chunks;
-}
-
-// 会話の最初の投稿を親にし、以降の質問・回答・コードはその ts をスレッドにして返信する。
-// コードは files:write を要求しないよう、ファイル添付ではなくスレッド内のコードブロックとして投稿する。
+// 会話の最初の投稿を親にし、以降の質問・回答はその ts をスレッドにして返信する。
+// コードは長くても 1 つにまとまり折りたたまれるよう、ファイルとして同じスレッドに添付する (files:write が必要)。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
 function postToSlack(conversation, text, files = []) {
   const post = slackQueue.then(async () => {
     const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
     if (!slackToken || !slackChannel) return;
-    const messages = [
-      ...(text ? [text.slice(0, 39000)] : []),
-      ...files.flatMap((file) => chunkLines(escapeSlack(file.content)).map((chunk) => `📎 ${file.name}\n\`\`\`\n${chunk}\n\`\`\``)),
-    ];
     let thread = threads[conversation];
-    for (const message of messages) {
-      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: message });
-      if (thread) continue;
-      thread = result.ts;
-      // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
-      await chrome.storage.local.set({ threads: { ...threads, [conversation]: thread } });
+    if (text) {
+      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000) });
+      if (!thread) {
+        thread = result.ts;
+        // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
+        await chrome.storage.local.set({ threads: { ...threads, [conversation]: thread } });
+      }
     }
+    if (!files.length) return;
+    const uploaded = [];
+    for (const file of files) {
+      const bytes = new TextEncoder().encode(file.content);
+      const { upload_url, file_id } = await slackApi(slackToken, 'files.getUploadURLExternal', { filename: file.name, length: bytes.length });
+      const upload = await fetch(upload_url, { method: 'POST', body: bytes });
+      if (!upload.ok) throw new Error(`Slack upload: HTTP ${upload.status}`);
+      uploaded.push({ id: file_id, title: file.name });
+    }
+    await slackApi(slackToken, 'files.completeUploadExternal', { files: JSON.stringify(uploaded), channel_id: slackChannel, thread_ts: thread });
   });
   slackQueue = post.catch(() => {});
   return post;

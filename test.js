@@ -27,10 +27,10 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
     },
   };
   const fetch = async (url, options) => {
-    sent.push({ url, ...options, body: Object.fromEntries(options.body) });
-    return { json: async () => ({ ok: true, ts: 'ts' + sent.length }) };
+    sent.push({ url, ...options, body: options.body instanceof URLSearchParams ? Object.fromEntries(options.body) : new TextDecoder().decode(options.body) });
+    return { ok: true, json: async () => url.endsWith('getUploadURLExternal') ? { ok: true, upload_url: 'https://files.slack.com/upload/' + sent.length, file_id: 'F' + sent.length } : { ok: true, ts: 'ts' + sent.length } };
   };
-  vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, URLSearchParams, setTimeout, fetch });
+  vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, URLSearchParams, TextEncoder, setTimeout, fetch });
   const message = (msg, sender = {}) => new Promise((resolve) => assert.equal(listener(msg, sender, resolve), true));
   assert.deepEqual(Object.keys(local), ['slackToken', 'slackChannel'], '旧履歴と Discord 設定を削除し、Slack 設定だけを保持する');
   // 新規会話の質問 2 件を同時に送っても親投稿は 1 つで、残りはそのスレッドへ入る
@@ -47,16 +47,16 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.ok((await message({ type: 'prompt', conversation: '../x', text: 'x' })).error);
   assert.equal(JSON.stringify(local).includes('新しい質問'), false, 'Slack 転送で本文を蓄積しない');
   sent.length = 0;
-  const long = Array.from({ length: 4000 }, (_, i) => `line ${i} <p>`).join('\n');
-  await message({ type: 'answer', conversation: 'abc', text: '📎 code-1.html', files: [{ name: 'code-1.html', content: long }] });
-  assert.ok(sent.length > 2, '長いコードは複数の投稿に分ける');
-  assert.ok(sent.every(({ url, body }) => url.endsWith('chat.postMessage') && body.thread_ts === 'ts1' && body.text.length <= 4000), 'コードはファイル添付せず、書式が崩れない 4,000 文字以内に分けて同じスレッドへ投稿する');
-  assert.match(sent[1].body.text, /^📎 code-1.html\n```\nline 0 &lt;p&gt;\n/);
-  assert.equal(sent.slice(1).map(({ body }) => body.text.split('\n').slice(2, -1).join('\n')).join('\n'), long.replace(/</g, '&lt;').replace(/>/g, '&gt;'), '分割してもコードを欠落させない');
+  await message({ type: 'answer', conversation: 'abc', text: '📎 code-1.html', files: [{ name: 'code-1.html', content: '<p>あ</p>' }] });
+  assert.deepEqual(sent.map(({ url }) => url.split('/').pop()), ['chat.postMessage', 'files.getUploadURLExternal', '2', 'files.completeUploadExternal'], 'コードは同じスレッドへファイルとして添付する');
+  assert.equal(sent[1].body.length, '10', 'ファイル長はバイト数で送る');
+  assert.equal(sent[2].body, '<p>あ</p>', 'ファイルの中身はエスケープせずそのまま上げる');
+  assert.deepEqual(sent[3].body, { files: JSON.stringify([{ id: 'F2', title: 'code-1.html' }]), channel_id: 'C1', thread_ts: 'ts1' });
   assert.ok((await message({ type: 'answer', conversation: 'abc', text: 'x', files: [{ name: '../x', content: 'x' }] })).error);
   sent.length = 0;
   await message({ type: 'canvas', conversation: 'abc', files: [{ name: 'canvas-1.html', content: '<html></html>' }] });
-  assert.deepEqual(sent.map(({ body }) => [body.thread_ts, body.text]), [['ts1', '📎 canvas-1.html\n```\n&lt;html&gt;&lt;/html&gt;\n```']], 'Canvas は本文なしでコードだけを同じスレッドへ流す');
+  assert.deepEqual(sent.map(({ url }) => url.split('/').pop()), ['files.getUploadURLExternal', '1', 'files.completeUploadExternal'], 'Canvas は本文なしでファイルだけを添付する');
+  assert.equal(sent[2].body.thread_ts, 'ts1', 'Canvas も同じスレッドへ添付する');
   sent.length = 1;
   await message({ type: 'startExport' });
   assert.equal(tabs[0].url, 'https://gemini.google.com/app');
