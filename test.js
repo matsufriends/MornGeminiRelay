@@ -7,7 +7,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
 (async () => {
   const local = { slackToken: 'xoxb-test', slackChannel: 'C1', webhook: 'https://discord.com/api/webhooks/example', history: [{ text: '旧履歴' }], importQueue: ['old'], importTotal: 1 };
   const session = {}, downloads = [], tabs = [], sent = [];
-  let listener, onRemoved, state = 'complete', nextId = 1;
+  let listener, onRemoved, state = 'complete', nextId = 1, rateLimited = 0;
   const removed = [];
   const storage = (data) => ({
     get: async (keys) => Object.fromEntries([].concat(keys).map((key) => [key, copy(data[key])])),
@@ -30,6 +30,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   };
   const fetch = async (url, options) => {
     sent.push({ url, ...options, body: options.body instanceof URLSearchParams ? Object.fromEntries(options.body) : new TextDecoder().decode(options.body) });
+    if (rateLimited && rateLimited--) return { status: 429, headers: { get: () => '0' } };
     return { ok: true, json: async () => url.endsWith('getUploadURLExternal') ? { ok: true, upload_url: 'https://files.slack.com/upload/' + sent.length, file_id: 'F' + sent.length } : { ok: true, ts: 'ts' + sent.length } };
   };
   vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, URLSearchParams, TextEncoder, setTimeout, fetch });
@@ -126,6 +127,11 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.equal(local.threads.abc, 'ts6', '対応表を新しいスレッドに置き換える');
   await message({ type: 'prompt', conversation: 'abc', text: '', account: 'me', attachments: ['画像'] }, sendTab);
   assert.equal(sent[7].body.text, '> 🧑‍💻 \u200B*me*\u200B\n\n📎 添付: 画像', '本文のない添付だけの質問も送る');
+  const before429 = sent.length;
+  rateLimited = 2;
+  await message({ type: 'answer', conversation: 'abc', text: '混雑時の回答' }, sendTab);
+  assert.equal(sent.length - before429, 3, '429 が返ったら待って送り直す');
+  assert.equal(sent.at(-1).body.text, '> ✨ \u200B*Gemini*\u200B\n混雑時の回答');
   await message({ type: 'exportSent' }, sendTab);
   assert.deepEqual([removed.at(-1), session.lastResult], [sendTab.tab.id, '「ブロック崩し」を Slack に送信しました'], '送信後は専用タブを閉じて結果を残す');
 

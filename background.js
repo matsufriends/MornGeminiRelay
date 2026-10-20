@@ -5,15 +5,22 @@ const escapeSlack = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').
 let slackQueue = Promise.resolve();
 
 // files.getUploadURLExternal が JSON を受け付けないため、全メソッドをフォーム形式で呼ぶ。undefined の項目 (親投稿時の thread_ts) は送らない。
+// 投稿が速すぎると 429 (ratelimited) が返るので、Retry-After の秒数だけ待って送り直す。
 async function slackApi(token, method, params) {
-  const response = await fetch(`https://slack.com/api/${method}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: new URLSearchParams(JSON.parse(JSON.stringify(params))),
-  });
-  const result = await response.json();
-  if (!result.ok) throw new Error(`Slack ${method}: ${result.error}`);
-  return result;
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(`https://slack.com/api/${method}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: new URLSearchParams(JSON.parse(JSON.stringify(params))),
+    });
+    if (response.status === 429 && attempt < 5) {
+      await new Promise((resolve) => setTimeout(resolve, (Number(response.headers.get('Retry-After')) || 1) * 1000));
+      continue;
+    }
+    const result = await response.json();
+    if (!result.ok) throw new Error(`Slack ${method}: ${result.error}`);
+    return result;
+  }
 }
 
 // 会話の最初の投稿を親にし、以降の質問・回答はその ts をスレッドにして返信する。

@@ -247,7 +247,7 @@ async function collectConversations() {
 }
 
 // 開いている会話を最初から読み、リアルタイム転送と同じ形式 (質問 → 回答 → Canvas) で Slack の新しいスレッドへ送る。
-// ponytail: Slack の投稿レート (1 秒 1 件程度) に合わせて 1 秒ずつ間を空ける。長い会話は送り終えるまで時間がかかる。
+// Slack の投稿レートは background が 429 を見て待つので、ここでは間を空けない。
 async function sendConversation() {
   await waitFor(() => document.querySelector('user-query'), '質問が見つからないため送信を停止しました');
   const scroller = document.querySelector('infinite-scroller');
@@ -261,10 +261,8 @@ async function sendConversation() {
     const answerRoot = () => response?.querySelector('message-content') || response;
     for (let t = 0; t < 30 && !(queryText(query.querySelector('.query-text') || query) && (!response || answerRoot().innerText.trim())); t++) await sleep(100);
     await request({ type: 'prompt', conversation, text: queryText(query.querySelector('.query-text') || query), account: account(), attachments: attachments(query), newThread: i === 0 });
-    await sleep(1000);
     if (!response) continue;
     await request({ type: 'answer', conversation, ...toMrkdwn(answerRoot()) });
-    await sleep(1000);
     const index = [...document.querySelectorAll('model-response')].indexOf(response);
     for (const [c, chip] of [...response.querySelectorAll('immersive-entry-chip')].entries()) {
       // 画面外の Canvas はプレビューが読み込まれないことがあるので、見える位置へ動かしてから問い合わせる
@@ -272,7 +270,6 @@ async function sendConversation() {
       const html = await canvasHtml(index, c, 15000);
       if (!html) continue;
       await request({ type: 'canvas', conversation, files: [{ name: `canvas-${c + 1}.html`, content: html }] });
-      await sleep(1000);
     }
   }
 }
