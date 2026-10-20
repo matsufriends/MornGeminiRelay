@@ -118,7 +118,10 @@ async function relayAnswer(conversation, before) {
     if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
     if (current && Date.now() - changed >= 1500) {
       const htmls = [];
-      for (let i = 0; i < lastResponse().querySelectorAll('immersive-entry-chip').length; i++) htmls[i] = await canvasHtml(i);
+      const chipCount = lastResponse().querySelectorAll('immersive-entry-chip').length;
+      for (let i = 0; i < chipCount; i++) htmls[i] = await canvasHtml(i);
+      // ponytail: Canvas 取得の原因調査用の一時ログ。動作を確認したら消す。
+      console.warn(`MornGeminiRelay: Canvas 診断 ${JSON.stringify({ chipCount, chipsInDocument: document.querySelectorAll('immersive-entry-chip').length, lengths: htmls.map((html) => html.length), heads: htmls.map((html) => html.slice(0, 40)) })}`);
       // 待つ間に DOM が作り直されていても最新の回答に書き込む。コード表示中なら canvas.js が同期で Monaco の全文を書き出す。
       const root = lastResponse();
       document.dispatchEvent(new CustomEvent('morn-gemini-relay:canvas'));
