@@ -12,6 +12,6 @@ if (location.protocol === 'blob:') {
   addEventListener('message', async (event) => {
     if (event.origin !== 'https://gemini.google.com' || event.data?.type !== 'morn-gemini-relay:get-canvas') return;
     const html = (await source) || `<!DOCTYPE html>\n${document.documentElement.outerHTML}`;
-    event.source.postMessage({ type: 'morn-gemini-relay:canvas', html: stripInjected(html) }, event.origin);
+    event.source.postMessage({ type: 'morn-gemini-relay:canvas', id: event.data.id, html: stripInjected(html) }, event.origin);
   });
 }

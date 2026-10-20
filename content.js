@@ -78,16 +78,21 @@ function toMrkdwn(root) {
   return { text, files };
 }
 
-// プレビュー表示中の Canvas は、iframe 内の blob: フレームで動く preview.js に HTML を問い合わせる
+// 子孫フレームを列挙する。cross-origin でも length と添字アクセスは許可されている。
+const descendants = (win, depth = 3) => depth ? Array.from({ length: win.length }, (_, i) => win[i]).flatMap((child) => [child, ...descendants(child, depth - 1)]) : [];
+
+// プレビュー表示中の Canvas は、iframe 配下の blob: フレームで動く preview.js に HTML を問い合わせる。
+// プレビューの読み込みが回答完了より遅れることがあるので、応答が来るまで繰り返し問い合わせる。
 function canvasHtml(iframe) {
   return new Promise((resolve) => {
-    const frames = iframe.contentWindow;
-    const targets = Array.from({ length: frames?.length || 0 }, (_, i) => frames[i]);
-    const done = (html) => { removeEventListener('message', onMessage); clearTimeout(timer); resolve(html); };
-    const onMessage = (event) => { if (targets.includes(event.source) && event.data?.type === 'morn-gemini-relay:canvas') done(event.data.html); };
+    const id = crypto.randomUUID();
+    const done = (html) => { removeEventListener('message', onMessage); clearInterval(timer); clearTimeout(timeout); resolve(html); };
+    const onMessage = (event) => { if (event.data?.type === 'morn-gemini-relay:canvas' && event.data.id === id) done(event.data.html); };
+    const ask = () => { for (const frame of iframe.contentWindow ? descendants(iframe.contentWindow) : []) frame.postMessage({ type: 'morn-gemini-relay:get-canvas', id }, '*'); };
     addEventListener('message', onMessage);
-    const timer = setTimeout(() => done(''), 3000);
-    for (const target of targets) target.postMessage({ type: 'morn-gemini-relay:get-canvas' }, '*');
+    const timer = setInterval(ask, 500);
+    const timeout = setTimeout(() => { console.warn('MornGeminiRelay: Canvas のコードを取得できませんでした'); done(''); }, 15000);
+    ask();
   });
 }
 

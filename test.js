@@ -182,13 +182,13 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
     document: { documentElement: { outerHTML: '<html></html>' } },
   });
   const ask = async (origin) => {
-    await previewListener({ origin, data: { type: 'morn-gemini-relay:get-canvas' }, source: { postMessage: (msg) => posted.push(msg) } });
+    await previewListener({ origin, data: { type: 'morn-gemini-relay:get-canvas', id: 'req' }, source: { postMessage: (msg) => posted.push(msg) } });
   };
   preview('blob:', '<!DOCTYPE html><html><head>' + injected + '<title>x</title></head></html>');
   await ask('https://evil.example');
   assert.equal(posted.length, 0, 'Gemini 以外からの問い合わせには答えない');
   await ask('https://gemini.google.com');
-  assert.deepEqual(copy(posted), [{ type: 'morn-gemini-relay:canvas', html: '<!DOCTYPE html><html><head><title>x</title></head></html>' }], 'プレビューの blob から認証トークン入りの差し込みを除いた HTML を返す');
+  assert.deepEqual(copy(posted), [{ type: 'morn-gemini-relay:canvas', id: 'req', html: '<!DOCTYPE html><html><head><title>x</title></head></html>' }], 'プレビューの blob から認証トークン入りの差し込みを除いた HTML を返す');
   posted.length = 0;
   preview('blob:', '<html><head><script data-bard-client-injected="true">window.__initial_auth_token = "secret";');
   await ask('https://gemini.google.com');
