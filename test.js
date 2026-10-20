@@ -50,7 +50,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   const long = Array.from({ length: 4000 }, (_, i) => `line ${i} <p>`).join('\n');
   await message({ type: 'answer', conversation: 'abc', text: '📎 code-1.html', files: [{ name: 'code-1.html', content: long }] });
   assert.ok(sent.length > 2, '長いコードは複数の投稿に分ける');
-  assert.ok(sent.every(({ url, body }) => url.endsWith('chat.postMessage') && body.thread_ts === 'ts1' && body.text.length <= 40000), 'コードはファイル添付せず同じスレッドへ投稿する');
+  assert.ok(sent.every(({ url, body }) => url.endsWith('chat.postMessage') && body.thread_ts === 'ts1' && body.text.length <= 4000), 'コードはファイル添付せず、書式が崩れない 4,000 文字以内に分けて同じスレッドへ投稿する');
   assert.match(sent[1].body.text, /^📎 code-1.html\n```\nline 0 &lt;p&gt;\n/);
   assert.equal(sent.slice(1).map(({ body }) => body.text.split('\n').slice(2, -1).join('\n')).join('\n'), long.replace(/</g, '&lt;').replace(/>/g, '&gt;'), '分割してもコードを欠落させない');
   assert.ok((await message({ type: 'answer', conversation: 'abc', text: 'x', files: [{ name: '../x', content: 'x' }] })).error);

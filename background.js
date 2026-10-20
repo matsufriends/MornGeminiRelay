@@ -16,8 +16,9 @@ async function slackApi(token, method, params) {
   return result;
 }
 
-// Slack の本文上限 (40,000 文字) に収まるよう、行の途中で切らずに分割する
-function chunkLines(text, limit = 39000) {
+// 行の途中で切らずに分割する。Slack は 4,000 文字を超える本文の書式を崩す (``` がコードブロックにならない) ので、
+// 見出しと ``` の分を残して 1 通 3,900 文字以内に収める。
+function chunkLines(text, limit = 3900) {
   const chunks = [''];
   for (const line of text.split('\n')) {
     if (chunks[chunks.length - 1].length + line.length + 1 > limit) chunks.push('');
