@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MornGeminiRelay",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Gemini の質問と回答を Slack のスレッドへ転送し、履歴を Markdown で保存する",
   "permissions": ["storage", "tabs", "downloads"],
   "host_permissions": ["https://slack.com/api/*", "https://files.slack.com/*"],
