@@ -291,7 +291,7 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
     dispatchEvent: (event) => { for (const fn of [...(domListeners[event.type] || [])]) fn(event); },
   });
   class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } }
-  Object.assign(context, { CustomEvent, clearTimeout() {}, crypto: { randomUUID: () => 'id' + now } });
+  Object.assign(context, { CustomEvent, clearTimeout() {}, setInterval: () => 0, clearInterval() {}, crypto: { randomUUID: () => 'id' + now } });
   let asked = 0, bridgeMessage;
   const previewWindow = { length: 0, postMessage: (msg) => {
     asked++;
@@ -306,6 +306,16 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('relayCanvas("abc", 1)', context);
   assert.deepEqual(copy(relayed), [{ type: 'canvas', conversation: 'abc', files: [{ name: 'canvas-1.html', content: '<html>全文</html>' }] }], 'Canvas の生成完了後に全文を 1 回だけ送る');
   assert.ok(now >= 5000 && asked > 1, '本文の完了後に現れた Canvas も、HTML が返るまで問い合わせ続ける');
+  // 読み込み中のフレームは最初の問い合わせを捨てるので、問い合わせ直して読み込み終わりを拾う
+  let reask;
+  context.setInterval = (fn) => { reask = fn; return 1; };
+  now = 1000;
+  asked = 0;
+  const loading = vm.runInContext('canvasHtml(1, 0, 15000)', context);
+  now = 6000;
+  reask();
+  assert.equal(await loading, '<html>全文</html>', '最初の問い合わせに答えがなくても、問い合わせ直して HTML を受け取る');
+  assert.equal(asked, 2);
   // IME 確定の Enter と送信の Enter が続いても、質問は 1 回だけ送る
   relayed.length = 0;
   const editor = { innerText: '確定前', closest: () => editor };
@@ -323,5 +333,5 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   await vm.runInContext('relay()', context).catch(() => {});
   await second;
   assert.deepEqual(copy(relayed.filter((msg) => msg.type === 'prompt')).map((msg) => msg.text), ['確定後'], '二重に押しても 1 回だけ、確定後の文字で送る。検知中の押下は期限を延ばし、取りこぼさない');
-  console.log('PASS: 全チャット取得・チャット送信 (新しいスレッド)・二重送信の防止・Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
+  console.log('PASS: Canvas 問い合わせの再試行・送信順の保証・全チャット取得・チャット送信 (新しいスレッド)・二重送信の防止・Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

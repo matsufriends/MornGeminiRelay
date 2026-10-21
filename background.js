@@ -27,10 +27,12 @@ async function slackApi(token, method, params) {
 // コードは長くても 1 つにまとまり折りたたまれるよう、ファイルとして同じスレッドに添付する (files:write が必要)。
 // 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
 // fresh なら既存のスレッドを使わず、新しい親投稿を作って対応表を置き換える (チャットを丸ごと送り直すとき)。
-function postToSlack(conversation, text, files = [], fresh = false) {
+// 本文は表示名に依存するので makeText(nickname) で受け取り、順番待ちの中で作る (await を挟むと送信順が入れ替わりうる)。
+function postToSlack(conversation, makeText, files = [], fresh = false) {
   const post = slackQueue.then(async () => {
-    const { slackToken, slackChannel, threads = {} } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads']);
+    const { slackToken, slackChannel, threads = {}, nickname } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads', 'nickname']);
     if (!slackToken || !slackChannel) return;
+    const text = makeText(nickname);
     let thread = fresh ? undefined : threads[conversation];
     if (text) {
       const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000) });
@@ -81,15 +83,18 @@ async function handleMessage(msg, sender) {
     if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
     // 同じ Bot が投稿するので、名前の行を Slack の引用 (左の縦線) にして自分と Gemini を見分けられるようにする。
     // Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る。
-    // 自分の名前はポップアップで設定したニックネームを優先して「ニックネーム (メール)」にし、未設定なら「Google アカウント名 (メール)」のまま
-    const { nickname } = await chrome.storage.local.get('nickname');
-    const email = msg.account?.match(/\(([^()]+@[^()]+)\)/)?.[1];
-    const me = nickname ? (email ? `${nickname} (${email})` : nickname) : msg.account || 'unknown';
-    const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(me)}*\u200B` : '✨ \u200B*Gemini*\u200B';
     // 添付は名前だけを知らせる (中身は送らない)
     const attached = Array.isArray(msg.attachments) ? msg.attachments.filter((name) => typeof name === 'string' && name).map((name) => name.slice(0, 200)) : [];
     const note = attached.length ? `\n📎 添付: ${escapeSlack(attached.join(', '))}` : '';
-    await postToSlack(msg.conversation, msg.type === 'canvas' ? '' : `> ${author}\n${escapeSlack(text)}${note}`, files, msg.type === 'prompt' && msg.newThread === true);
+    const email = msg.account?.match(/\(([^()]+@[^()]+)\)/)?.[1];
+    const makeText = (nickname) => {
+      if (msg.type === 'canvas') return '';
+      // 自分の名前はポップアップで設定したニックネームを優先して「ニックネーム (メール)」にし、未設定なら「Google アカウント名 (メール)」のまま
+      const me = nickname ? (email ? `${nickname} (${email})` : nickname) : msg.account || 'unknown';
+      const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(me)}*\u200B` : '✨ \u200B*Gemini*\u200B';
+      return `> ${author}\n${escapeSlack(text)}${note}`;
+    };
+    await postToSlack(msg.conversation, makeText, files, msg.type === 'prompt' && msg.newThread === true);
     return {};
   }
 

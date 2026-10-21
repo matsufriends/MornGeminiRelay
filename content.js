@@ -98,10 +98,11 @@ function toMrkdwn(root) {
 
 // Canvas のプレビューに HTML を問い合わせる。実際の問い合わせはページ側の canvas-bridge.js が行い、返事を DOM イベントで返す。
 // HTML を持つフレームだけが答えるので、timeoutMs 以内に返事がなければ null (まだ生成中・読み込み中)。
+// 読み込み中のフレームは問い合わせを捨てるので、読み込み終わりを逃さないよう 300ms ごとに問い合わせ直す。
 function canvasHtml(response, chip, timeoutMs) {
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
-    const done = (html) => { document.removeEventListener('morn-gemini-relay:canvas', onReply); clearTimeout(timeout); resolve(html); };
+    const done = (html) => { document.removeEventListener('morn-gemini-relay:canvas', onReply); clearInterval(timer); clearTimeout(timeout); resolve(html); };
     const onReply = (event) => {
       const reply = JSON.parse(event.detail);
       if (reply.id !== id) return;
@@ -109,8 +110,10 @@ function canvasHtml(response, chip, timeoutMs) {
       done(reply.html);
     };
     document.addEventListener('morn-gemini-relay:canvas', onReply);
+    const ask = () => document.dispatchEvent(new CustomEvent('morn-gemini-relay:ask-canvas', { detail: JSON.stringify({ id, response, chip }) }));
+    const timer = setInterval(ask, 300);
     const timeout = setTimeout(() => done(null), timeoutMs);
-    document.dispatchEvent(new CustomEvent('morn-gemini-relay:ask-canvas', { detail: JSON.stringify({ id, response, chip }) }));
+    ask();
   });
 }
 
@@ -132,10 +135,11 @@ async function relayAnswer(conversation, before) {
 async function relayCanvas(conversation, index) {
   const chips = () => document.querySelectorAll('model-response')[index]?.querySelectorAll('immersive-entry-chip') || [];
   const finished = new Set();
-  for (const end = Date.now() + 600000; Date.now() < end; await sleep(1000)) {
+  // HTML を持っていれば返事はすぐ来るので、短い間隔で見張り、生成完了から投稿までの遅れを 1 秒未満にする
+  for (const end = Date.now() + 600000; Date.now() < end; await sleep(500)) {
     for (let i = 0; i < chips().length; i++) {
       if (finished.has(i)) continue;
-      const html = await canvasHtml(index, i, 2000);
+      const html = await canvasHtml(index, i, 300);
       if (html === null) continue;
       finished.add(i); // 送れない理由があった ('' ) 場合も再試行しない
       if (html) await request({ type: 'canvas', conversation, files: [{ name: `canvas-${i + 1}.html`, content: html }] });
@@ -248,7 +252,14 @@ async function collectConversations() {
 
 // 開いている会話を最初から読み、リアルタイム転送と同じ形式 (質問 → 回答 → Canvas) で Slack の新しいスレッドへ送る。
 // Slack の投稿レートは background が 429 を見て待つので、ここでは間を空けない。
+// 送信順は background の順番待ちが守るので、投稿の完了を待たずに次のやり取りを読み進め、最後にまとめて結果を待つ。
 async function sendConversation() {
+  const posts = [];
+  let failure;
+  const post = (message) => {
+    if (failure) throw failure;
+    posts.push(request(message).catch((error) => { failure ??= error; }));
+  };
   await waitFor(() => document.querySelector('user-query'), '質問が見つからないため送信を停止しました');
   const scroller = document.querySelector('infinite-scroller');
   await settle(() => String(document.querySelectorAll('user-query').length), () => { if (scroller) scroller.scrollTop = 0; }, scroller || document);
@@ -260,18 +271,20 @@ async function sendConversation() {
     const response = query.closest('.conversation-container')?.querySelector('model-response');
     const answerRoot = () => response?.querySelector('message-content') || response;
     for (let t = 0; t < 30 && !(queryText(query.querySelector('.query-text') || query) && (!response || answerRoot().innerText.trim())); t++) await sleep(100);
-    await request({ type: 'prompt', conversation, text: queryText(query.querySelector('.query-text') || query), account: account(), attachments: attachments(query), newThread: i === 0 });
+    post({ type: 'prompt', conversation, text: queryText(query.querySelector('.query-text') || query), account: account(), attachments: attachments(query), newThread: i === 0 });
     if (!response) continue;
-    await request({ type: 'answer', conversation, ...toMrkdwn(answerRoot()) });
+    post({ type: 'answer', conversation, ...toMrkdwn(answerRoot()) });
     const index = [...document.querySelectorAll('model-response')].indexOf(response);
     for (const [c, chip] of [...response.querySelectorAll('immersive-entry-chip')].entries()) {
       // 画面外の Canvas はプレビューが読み込まれないことがあるので、見える位置へ動かしてから問い合わせる
       chip.scrollIntoView?.({ block: 'center' });
       const html = await canvasHtml(index, c, 15000);
       if (!html) continue;
-      await request({ type: 'canvas', conversation, files: [{ name: `canvas-${c + 1}.html`, content: html }] });
+      post({ type: 'canvas', conversation, files: [{ name: `canvas-${c + 1}.html`, content: html }] });
     }
   }
+  await Promise.all(posts);
+  if (failure) throw failure;
 }
 
 async function exportCurrentPage() {
