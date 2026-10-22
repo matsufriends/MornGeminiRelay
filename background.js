@@ -1,3 +1,4 @@
+chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
 // 設定と会話 ID → Slack スレッドの対応だけを永続保存する。旧版の履歴・取り込み情報・Discord 設定は削除する。
 chrome.storage.local.remove(['history', 'importQueue', 'importTotal', 'webhook']);
 
@@ -31,8 +32,8 @@ async function slackApi(token, method, params) {
 // 投稿内容は表示名に依存するので、順番待ちの中で作る (await を挟むと送信順が入れ替わりうる)。
 function postToSlack(conversation, makeMessage, files = [], fresh = false, icon) {
   const post = slackQueue.then(async () => {
-    const { slackToken, slackChannel, threads = {}, nickname } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads', 'nickname']);
-    if (!slackToken || !slackChannel) return;
+    const { slackToken, slackChannel, threads = {}, nickname, relayEnabled } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads', 'nickname', 'relayEnabled']);
+    if (!relayEnabled || !slackToken || !slackChannel) return;
     const { text, username } = makeMessage(nickname);
     let thread = fresh ? undefined : threads[conversation];
     if (text) {
@@ -110,6 +111,10 @@ async function handleMessage(msg, sender) {
     }
     // download: 全会話を .md に保存 / list: 会話一覧だけを取得 / send: 選んだ会話を Slack の新しいスレッドへ送る
     const mode = ['list', 'send'].includes(msg.mode) ? msg.mode : 'download';
+    if (mode === 'send') {
+      const { relayEnabled, slackToken, slackChannel } = await chrome.storage.local.get(['relayEnabled', 'slackToken', 'slackChannel']);
+      if (!relayEnabled || !slackToken || !slackChannel) throw new Error('設定で Slack 転送を有効にして保存してください');
+    }
     const chat = mode === 'send' ? validChat(msg.chat) : null;
     // 空タブで ID を確定してから Gemini を開き、ページ読み込みとの競合を避ける。
     const tab = await chrome.tabs.create({ url: 'about:blank' });

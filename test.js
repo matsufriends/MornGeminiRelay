@@ -5,11 +5,12 @@ const vm = require('node:vm');
 const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 
 (async () => {
-  const local = { slackToken: 'xoxb-test', slackChannel: 'C1', webhook: 'https://discord.com/api/webhooks/example', history: [{ text: '旧履歴' }], importQueue: ['old'], importTotal: 1 };
+  const local = { slackToken: 'xoxb-test', slackChannel: 'C1', relayEnabled: true, webhook: 'https://discord.com/api/webhooks/example', history: [{ text: '旧履歴' }], importQueue: ['old'], importTotal: 1 };
   const session = {}, downloads = [], tabs = [], sent = [];
   let listener, onRemoved, state = 'complete', nextId = 1, rateLimited = 0, blockedUpload, uploadStarted;
   const removed = [];
   const storage = (data) => ({
+    setAccessLevel: async (options) => assert.equal(options.accessLevel, 'TRUSTED_CONTEXTS'),
     get: async (keys) => Object.fromEntries([].concat(keys).map((key) => [key, copy(data[key])])),
     set: async (values) => Object.assign(data, copy(values)),
     remove: async (keys) => { for (const key of [].concat(keys)) delete data[key]; },
@@ -36,7 +37,12 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   };
   vm.runInNewContext(fs.readFileSync('background.js', 'utf8'), { chrome, URL, URLSearchParams, TextEncoder, setTimeout, fetch });
   const message = (msg, sender = {}) => new Promise((resolve) => assert.equal(listener(msg, sender, resolve), true));
-  assert.deepEqual(Object.keys(local), ['slackToken', 'slackChannel'], '旧履歴と Discord 設定を削除し、Slack 設定だけを保持する');
+  assert.deepEqual(Object.keys(local), ['slackToken', 'slackChannel', 'relayEnabled'], '旧履歴と Discord 設定を削除し、Slack 設定だけを保持する');
+  local.relayEnabled = false;
+  await message({ type: 'prompt', conversation: 'off', text: '送らない' });
+  assert.equal(sent.length, 0, '同意前・停止中は Slack に送らない');
+  assert.match((await message({ type: 'startExport', mode: 'send' })).error, /転送を有効/);
+  local.relayEnabled = true;
   // 新規会話の質問 2 件を同時に送っても親投稿は 1 つで、残りはそのスレッドへ入る
   await Promise.all([
     message({ type: 'prompt', conversation: 'abc', text: '新しい質問 <!channel>', account: 'test account' }),
@@ -508,5 +514,25 @@ const copy = (value) => value === undefined ? undefined : JSON.parse(JSON.string
   assert.equal(timings[0].at, 150, '質問の描画が 5 秒遅れても、受理後最初の確認 (150ms) で本文を送る');
   assert.ok(timings[1].at < 5000, '添付名が出る前に回答も転送できる');
   assert.deepEqual(copy(relayed[2].attachments), ['資料.pdf'], '遅れて表示された添付名も失わない');
+  const fields = Object.fromEntries(['slackToken', 'slackChannel', 'nickname', 'relayEnabled', 'save', 'export', 'list', 'send', 'chat', 'status'].map((id) => [id, { value: '', checked: false, replaceChildren() {}, append() {} }]));
+  let savedSettings;
+  vm.runInNewContext(fs.readFileSync('popup.js', 'utf8'), {
+    document: { getElementById: (id) => fields[id] }, Option: function () {},
+    chrome: { storage: {
+      local: { get: (defaults, cb) => cb(defaults), set: (values, cb) => { savedSettings = values; cb(); } },
+      session: { get: (keys, cb) => cb({}) }, onChanged: { addListener() {} },
+    } },
+  });
+  assert.equal(fields.relayEnabled.checked, false, '初期状態は転送無効');
+  fields.relayEnabled.checked = true;
+  fields.save.onclick();
+  assert.equal(savedSettings, undefined, 'Token・投稿先なしでは転送を有効にできない');
+  fields.slackToken.value = ' xoxb-example ';
+  fields.slackChannel.value = ' C12345 ';
+  fields.save.onclick();
+  assert.deepEqual(copy(savedSettings), { slackToken: 'xoxb-example', slackChannel: 'C12345', nickname: '', relayEnabled: true });
+  fields.relayEnabled.checked = false;
+  fields.save.onclick();
+  assert.equal(savedSettings.relayEnabled, false, 'チェックを外して保存すれば停止する');
   console.log('PASS: 質問本文の即時転送・添付名の後追い通知・Canvas 問い合わせの再試行・送信順の保証・全チャット取得・チャット送信 (新しいスレッド)・二重送信の防止・Slack スレッド転送・コード投稿・Canvas 全文の後追い送信・mrkdwn 変換・回答検知・転送・永続保存の廃止・専用タブ・保存の成功/失敗・重複質問・遅延一覧・待機時間 (静止時 800ms)');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="ja">
 <meta charset="utf-8">
+<title>MornGeminiRelay</title>
 <style>
   :root { --edge: 12px; --panel: 8px; --gap: 8px; --section: 16px; }
   body { width: 320px; margin: 0; padding: var(--edge); font: 13px sans-serif; }
@@ -26,6 +27,9 @@
   <input id="nickname" placeholder="空欄なら Google アカウント名">
   <button id="save">保存</button>
 </div>
+<p>転送を有効にすると、Gemini の質問・回答・生成コード・Canvas HTML・表示名・添付ファイル名を指定の Slack チャンネルへ送ります。</p>
+<label><input id="relayEnabled" type="checkbox"> Slack への転送に同意して有効にする</label>
+<p><a href="privacy.html" target="_blank" rel="noopener">プライバシーポリシー</a> · 設定を変更したら「保存」を押してください。</p>
 <button id="list">全チャットを取得</button>
 <div class="slack-row">
   <select id="chat" aria-label="Slack に送るチャット" disabled><option>先に全チャットを取得してください</option></select>

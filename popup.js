@@ -20,10 +20,11 @@ function showChats(chats = []) {
   $('chat').disabled = $('send').disabled = !chats.length;
 }
 
-chrome.storage.local.get({ slackToken: '', slackChannel: '', nickname: '' }, ({ slackToken, slackChannel, nickname }) => {
+chrome.storage.local.get({ slackToken: '', slackChannel: '', nickname: '', relayEnabled: false }, ({ slackToken, slackChannel, nickname, relayEnabled }) => {
   $('slackToken').value = slackToken;
   $('slackChannel').value = slackChannel;
   $('nickname').value = nickname;
+  $('relayEnabled').checked = relayEnabled;
 });
 let chats = [];
 chrome.storage.session.get(['exportJob', 'chatList', 'lastResult'], (values) => {
@@ -39,7 +40,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.exportJob || changes.lastResult) chrome.storage.session.get('exportJob', ({ exportJob }) => showProgress(exportJob));
 });
 
-$('save').onclick = () => chrome.storage.local.set({ slackToken: $('slackToken').value.trim(), slackChannel: $('slackChannel').value.trim(), nickname: $('nickname').value.trim() }, () => status('保存しました'));
+$('save').onclick = () => {
+  const slackToken = $('slackToken').value.trim(), slackChannel = $('slackChannel').value.trim();
+  const relayEnabled = $('relayEnabled').checked;
+  if (relayEnabled && (!slackToken.startsWith('xoxb-') || !/^[CG][A-Z0-9]+$/.test(slackChannel))) {
+    status('Bot Token とチャンネル ID を確認してください');
+    return;
+  }
+  chrome.storage.local.set({ slackToken, slackChannel, nickname: $('nickname').value.trim(), relayEnabled }, () => status(relayEnabled ? '保存しました。Slack 転送は有効です' : '保存しました。Slack 転送は停止中です'));
+};
 
 async function start(message) {
   for (const id of ['export', 'list', 'send']) $(id).disabled = true;

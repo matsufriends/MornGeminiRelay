@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MornGeminiRelay プライバシーポリシー</title>
+<style>body{max-width:760px;margin:48px auto;padding:0 24px;font:16px/1.8 sans-serif;color:#172b36}a{color:#156e72}</style>
+<h1>プライバシーポリシー</h1>
+<p>MornGeminiRelay は Gemini の会話を、利用者が指定した Slack に転送し、質問履歴を端末に保存する Chrome 拡張です。最終更新：2026年10月22日。</p>
+<h2>取り扱うデータ</h2>
+<p>Gemini の会話本文、会話タイトル・URL・ID、生成コード、取得できた Canvas HTML、表示名、添付ファイル名を機能の実行に必要な範囲で読み取ります。Slack 転送を有効にして保存すると、質問・回答・生成コード・Canvas HTML・表示名・添付ファイル名を指定チャンネルに送ります。過去の会話の送信は利用者の操作で開始します。ユーザーが Gemini に添付したファイルの中身は読み取り・転送しません。ただし、Gemini の回答に引用された内容は回答の一部として転送されます。</p>
+<h2>保存先と送信先</h2>
+<p>Slack Bot Token、チャンネル ID、表示名、転送の有効・無効、会話 ID と Slack スレッドの対応をブラウザのローカルストレージに保存します。会話一覧と処理状況はブラウザのセッションストレージに保持します。Canvas HTML は取得のためプレビューのページ側セッションストレージにも一時保存します。会話本文は拡張のストレージに永続保存しません。Markdown 保存を実行した場合は、質問・会話タイトル・URL を端末にダウンロードします。</p>
+<p>Bot Token は Slack API への認証に使用します。Slack への通信は HTTPS です。開発者が管理するサーバーへの送信、アクセス解析、広告、データの販売は行いません。Slack に転送した内容は、利用者のワークスペースのアクセス権限・保持設定および Slack の規約に従って管理されます。チャンネルの参加者が内容を閲覧できます。</p>
+<h2>停止・削除</h2>
+<p>設定の「Slack への転送に同意して有効にする」を外して保存すると、それ以後に開始する転送を停止できます。すでに実行中の通信は完了する場合があります。拡張を削除するとブラウザ内の拡張用データが削除されます。Slack 投稿・アップロード済みファイル・ダウンロード済み Markdown は残るため、必要に応じて各保存先で削除してください。Token を無効にする場合は Slack 側で失効させてください。</p>
+<h2>お問い合わせ</h2>
+<p><a href="https://github.com/matsufriends/MornGeminiRelay/issues">GitHub Issues</a> へご連絡ください。Token や非公開の会話内容を投稿しないでください。</p>
+</html>
