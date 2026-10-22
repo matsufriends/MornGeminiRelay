@@ -40,5 +40,5 @@ addEventListener('message', (event) => {
   const html = stripInjected(raw);
   const error = /<script\b[^>]*\bdata-bard-client-injected/.test(html) ? '差し込みスクリプトを除去できませんでした'
     : secrets().some((secret) => html.includes(secret)) ? '認証情報が残っていたため送りませんでした' : '';
-  event.source.postMessage({ type: 'morn-gemini-relay:canvas', id: event.data.id, html: error ? '' : html, error, source }, event.origin);
+  event.source.postMessage({ type: 'morn-gemini-relay:canvas', id: event.data.id, html: error ? '' : html, error, source, url: location.href }, event.origin);
 });

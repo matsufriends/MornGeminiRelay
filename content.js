@@ -37,12 +37,6 @@ function attachments(query) {
 }
 
 const STOP_BTN ='button[aria-label*="停止"], button[aria-label*="Stop" i]';
-const lastResponse = () => {
-  const responses = document.querySelectorAll('model-response');
-  const last = responses[responses.length - 1];
-  return last?.querySelector('message-content') || last;
-};
-
 const EXT = { javascript: 'js', typescript: 'ts', python: 'py', bash: 'sh', shell: 'sh', csharp: 'cs', 'c#': 'cs', markdown: 'md', yaml: 'yml' };
 // Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る
 const wrap = (mark, text) => text.trim() ? `​${mark}${text.trim()}${mark}​` : '';
@@ -107,7 +101,7 @@ function canvasHtml(response, chip, timeoutMs) {
       const reply = JSON.parse(event.detail);
       if (reply.id !== id) return;
       if (reply.error) console.warn(`MornGeminiRelay: Canvas のコードを送れません: ${reply.error}`);
-      done(reply.html);
+      done(reply);
     };
     document.addEventListener('morn-gemini-relay:canvas', onReply);
     const ask = () => document.dispatchEvent(new CustomEvent('morn-gemini-relay:ask-canvas', { detail: JSON.stringify({ id, response, chip }) }));
@@ -117,39 +111,56 @@ function canvasHtml(response, chip, timeoutMs) {
   });
 }
 
-// 新しい回答が現れ、停止ボタンが消えて本文が 1.5 秒変わらなくなったら完了とみなす
+// Gemini の完了表示で即送信する。表示がない場合は本文の静止 1.5 秒で代用する。
 async function relayAnswer(conversation, before) {
   await waitFor(() => document.querySelectorAll('model-response').length > before, '回答が見つかりません');
   let previous = '', changed = Date.now();
-  for (const end = Date.now() + 600000; Date.now() < end; await sleep(300)) {
-    const current = lastResponse()?.innerText.trim() || '';
-    if (current !== previous || document.querySelector(STOP_BTN)) { previous = current; changed = Date.now(); }
-    if (current && Date.now() - changed >= 1500) return request({ type: 'answer', conversation, ...toMrkdwn(lastResponse()) });
+  for (const end = Date.now() + 600000; Date.now() < end; await sleep(100)) {
+    const response = document.querySelectorAll('model-response')[before];
+    const root = response?.querySelector('message-content') || response;
+    const current = root?.innerText.trim() || '';
+    const generating = document.querySelector(STOP_BTN);
+    if (current !== previous || generating) { previous = current; changed = Date.now(); }
+    if (current && !generating && (response.querySelector('.response-footer.complete') || Date.now() - changed >= 1500)) return request({ type: 'answer', conversation, ...toMrkdwn(root) });
   }
   throw new Error('回答の生成が完了しませんでした');
 }
 
-// Canvas は本文の完了後も生成が続き、終わってからプレビューに HTML が載る。
-// そこで本文とは別に回答を見張り、プレビューが HTML を返したらスレッドに追加で投稿する。
-// Angular が要素を作り直しても追えるよう、回答もチップも毎回 index で探し直す。
-async function relayCanvas(conversation, index) {
-  const chips = () => document.querySelectorAll('model-response')[index]?.querySelectorAll('immersive-entry-chip') || [];
-  const finished = new Set();
-  // HTML を持っていれば返事はすぐ来るので、短い間隔で見張り、生成完了から投稿までの遅れを 1 秒未満にする
-  for (const end = Date.now() + 600000; Date.now() < end; await sleep(500)) {
-    for (let i = 0; i < chips().length; i++) {
-      if (finished.has(i)) continue;
-      const html = await canvasHtml(index, i, 300);
-      if (html === null) continue;
-      finished.add(i); // 送れない理由があった ('' ) 場合も再試行しない
-      if (html) await request({ type: 'canvas', conversation, files: [{ name: `canvas-${i + 1}.html`, content: html }] });
+let canvasWatch = 0;
+const sentCanvases = new Map();
+
+// 新しい回答に Canvas が付かず、過去の回答の Canvas が更新される場合もある。
+// 回答後の 10 分間、会話内のプレビューを見張り、1.5 秒変わらなかった HTML を変更時だけ添付する。
+async function relayCanvas(conversation) {
+  const watch = ++canvasWatch, path = location.pathname;
+  if (!sentCanvases.has(conversation)) sentCanvases.set(conversation, new Map());
+  const sent = sentCanvases.get(conversation), pending = new Map();
+  const active = () => watch === canvasWatch && location.pathname === path;
+  for (const end = Date.now() + 600000; active() && Date.now() < end; await sleep(500)) {
+    const responses = document.querySelectorAll('model-response');
+    for (let r = 0; r < responses.length; r++) {
+      const chips = responses[r].querySelectorAll?.('immersive-entry-chip') || [];
+      for (let i = 0; i < chips.length; i++) {
+        if (!chips[i].querySelector('iframe')) continue;
+        const result = await canvasHtml(r, i, 300);
+        if (!active()) return;
+        const { html, source, url } = result || {};
+        const key = `${r}:${i}`;
+        if (!html || document.querySelector(STOP_BTN)) { pending.delete(key); continue; }
+        const previous = sent.get(key);
+        // DOM で代用した場合、同じプレビュー内のスコアやアニメーションの変化はコード更新に数えない。
+        if (previous?.html === html || (source === 'dom' && previous?.source === 'dom' && previous.url === url)) { pending.delete(key); continue; }
+        if (pending.get(key)?.html !== html) pending.set(key, { html, changed: Date.now() });
+        if (Date.now() - pending.get(key).changed < 1500) continue;
+        await request({ type: 'canvas', conversation, files: [{ name: `canvas-${i + 1}.html`, content: html }] });
+        sent.set(key, { html, source, url });
+        pending.delete(key);
+      }
     }
-    if (chips().length && finished.size === chips().length) return;
   }
-  if (chips().length) console.warn('MornGeminiRelay: Canvas のコードを 10 分以内に取得できませんでした');
 }
 
-// Enter は IME 確定でも飛ぶので、押下時のテキストを控えて「入力欄が空になった = Gemini が受理した」ときだけ送る。
+// Enter は IME 確定でも飛ぶので、新しい質問の描画か入力欄のクリアで Gemini の受理を確認する。
 // IME 確定の Enter → 送信の Enter や、Enter と送信ボタンが続くと検知が並走して二重送信になるので、
 // 検知中の押下は新たに検知せず、検知の期限を延ばすだけにする。
 let detectUntil = 0;
@@ -158,26 +169,37 @@ async function relay() {
   let text = editor?.innerText.trim();
   if (!text) return;
   const detecting = Date.now() < detectUntil;
-  detectUntil = Date.now() + 1500;
+  detectUntil = Date.now() + 15000;
   if (detecting) return;
   const before = document.querySelectorAll('model-response').length;
-  const queries = document.querySelectorAll('user-query').length;
+  const queries = new Set(document.querySelectorAll('user-query'));
+  const newQuery = () => {
+    const all = document.querySelectorAll('user-query'), last = all[all.length - 1];
+    return last && !queries.has(last) && queryText(last.querySelector('.query-text') || last) === text ? last : null;
+  };
   let sent = false;
   while (!sent && Date.now() < detectUntil) {
     await sleep(150);
-    sent = !editor.innerText.trim();
+    // Angular が入力欄を交換しても、切り離された古い要素を見続けない。
+    const currentEditor = document.querySelector('.ql-editor');
+    sent = !!newQuery() || !!currentEditor && !currentEditor.innerText.trim();
     // 検知中に IME で確定した文字も含めるよう、空になる直前の内容を控え直す
-    if (!sent) text = editor.innerText.trim();
+    if (!sent && currentEditor?.innerText.trim()) text = currentEditor.innerText.trim();
   }
   detectUntil = 0;
-  if (!sent) return;
+  if (!sent) { console.warn('MornGeminiRelay: 15 秒以内に質問の送信を確認できませんでした'); return; }
+  canvasWatch++;
   const conversation = await conversationId();
-  // 添付は送信後の質問に表示されるので、新しい質問が描画されるのを待って読む (出なければ添付なし扱い)
-  await waitFor(() => document.querySelectorAll('user-query').length > queries, '').catch(() => {});
-  const query = document.querySelectorAll('user-query')[queries];
-  await request({ type: 'prompt', conversation, text, account: account(), attachments: attachments(query) });
-  await relayAnswer(conversation, before);
-  return relayCanvas(conversation, before);
+  const query = newQuery();
+  const prompt = request({ type: 'prompt', conversation, text, account: account(), attachments: query ? attachments(query) : [] });
+  // 添付名の描画は本文を待たせず、遅れて表示された場合だけ同じスレッドへ追記する。
+  const attached = (async () => {
+    if (query) return;
+    await waitFor(newQuery, '').catch(() => {});
+    const names = attachments(newQuery());
+    if (names.length) await request({ type: 'attachments', conversation, account: account(), attachments: names });
+  })();
+  await Promise.all([prompt, attached, relayAnswer(conversation, before).then(() => relayCanvas(conversation))]);
 }
 
 document.addEventListener('keydown', (e) => {
@@ -186,6 +208,20 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('mousedown', (e) => {
   if (e.target.closest(SEND_BTN)) relay().catch(console.error);
+}, true);
+
+// Canvas の自動修正は入力欄を経由せず、空の user-query と新しい回答を追加する。
+async function relayRepair() {
+  canvasWatch++;
+  const before = document.querySelectorAll('model-response').length;
+  const conversation = await conversationId();
+  await relayAnswer(conversation, before);
+  return relayCanvas(conversation);
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest(SEND_BTN)) return relay().catch(console.error);
+  if (e.target.closest('button[data-test-id="fix-errors-button"]')) return relayRepair().catch(console.error);
 }, true);
 
 // ---- Gemini を開いて直接 Markdown に保存 ----
@@ -271,14 +307,16 @@ async function sendConversation() {
     const response = query.closest('.conversation-container')?.querySelector('model-response');
     const answerRoot = () => response?.querySelector('message-content') || response;
     for (let t = 0; t < 30 && !(queryText(query.querySelector('.query-text') || query) && (!response || answerRoot().innerText.trim())); t++) await sleep(100);
-    post({ type: 'prompt', conversation, text: queryText(query.querySelector('.query-text') || query), account: account(), attachments: attachments(query), newThread: i === 0 });
+    const text = queryText(query.querySelector('.query-text') || query);
+    const attached = attachments(query);
+    if (text || attached.length) post({ type: 'prompt', conversation, text, account: account(), attachments: attached, newThread: i === 0 });
     if (!response) continue;
     post({ type: 'answer', conversation, ...toMrkdwn(answerRoot()) });
     const index = [...document.querySelectorAll('model-response')].indexOf(response);
     for (const [c, chip] of [...response.querySelectorAll('immersive-entry-chip')].entries()) {
       // 画面外の Canvas はプレビューが読み込まれないことがあるので、見える位置へ動かしてから問い合わせる
       chip.scrollIntoView?.({ block: 'center' });
-      const html = await canvasHtml(index, c, 15000);
+      const html = (await canvasHtml(index, c, 15000))?.html;
       if (!html) continue;
       post({ type: 'canvas', conversation, files: [{ name: `canvas-${c + 1}.html`, content: html }] });
     }

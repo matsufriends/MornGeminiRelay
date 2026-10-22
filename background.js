@@ -3,6 +3,7 @@ chrome.storage.local.remove(['history', 'importQueue', 'importTotal', 'webhook']
 
 const escapeSlack = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 let slackQueue = Promise.resolve();
+let fileQueue = Promise.resolve();
 
 // files.getUploadURLExternal が JSON を受け付けないため、全メソッドをフォーム形式で呼ぶ。undefined の項目 (親投稿時の thread_ts) は送らない。
 // 投稿が速すぎると 429 (ratelimited) が返るので、Retry-After の秒数だけ待って送り直す。
@@ -25,24 +26,30 @@ async function slackApi(token, method, params) {
 
 // 会話の最初の投稿を親にし、以降の質問・回答はその ts をスレッドにして返信する。
 // コードは長くても 1 つにまとまり折りたたまれるよう、ファイルとして同じスレッドに添付する (files:write が必要)。
-// 同じ会話の親投稿が二重にできないよう、投稿は 1 件ずつ順に処理する。
+// 親投稿の作成と本文は順番を守り、時間のかかる添付は別の列で処理して次の本文を待たせない。
 // fresh なら既存のスレッドを使わず、新しい親投稿を作って対応表を置き換える (チャットを丸ごと送り直すとき)。
-// 本文は表示名に依存するので makeText(nickname) で受け取り、順番待ちの中で作る (await を挟むと送信順が入れ替わりうる)。
-function postToSlack(conversation, makeText, files = [], fresh = false) {
+// 投稿内容は表示名に依存するので、順番待ちの中で作る (await を挟むと送信順が入れ替わりうる)。
+function postToSlack(conversation, makeMessage, files = [], fresh = false, icon) {
   const post = slackQueue.then(async () => {
     const { slackToken, slackChannel, threads = {}, nickname } = await chrome.storage.local.get(['slackToken', 'slackChannel', 'threads', 'nickname']);
     if (!slackToken || !slackChannel) return;
-    const text = makeText(nickname);
+    const { text, username } = makeMessage(nickname);
     let thread = fresh ? undefined : threads[conversation];
     if (text) {
-      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000) });
+      const result = await slackApi(slackToken, 'chat.postMessage', { channel: slackChannel, thread_ts: thread, text: text.slice(0, 39000), username, icon_emoji: icon });
       if (!thread) {
         thread = result.ts;
         // ponytail: 対応表は会話数ぶん増え続ける。肥大が問題になったら古いものから消す。
         await chrome.storage.local.set({ threads: { ...threads, [conversation]: thread } });
       }
     }
-    if (!files.length) return;
+    return { slackToken, slackChannel, thread };
+  });
+  slackQueue = post.catch(() => {});
+  if (!files.length) return post;
+  const upload = Promise.all([post, fileQueue]).then(async ([target]) => {
+    if (!target) return;
+    const { slackToken, slackChannel, thread } = target;
     const uploaded = [];
     for (const file of files) {
       const bytes = new TextEncoder().encode(file.content);
@@ -51,10 +58,10 @@ function postToSlack(conversation, makeText, files = [], fresh = false) {
       if (!upload.ok) throw new Error(`Slack upload: HTTP ${upload.status}`);
       uploaded.push({ id: file_id, title: file.name });
     }
-    await slackApi(slackToken, 'files.completeUploadExternal', { files: JSON.stringify(uploaded), channel_id: slackChannel, thread_ts: thread });
+    await slackApi(slackToken, 'files.completeUploadExternal', { files: JSON.stringify(uploaded), channel_id: slackChannel, thread_ts: thread, username: 'Gemini 添付', icon_emoji: ':paperclip:' });
   });
-  slackQueue = post.catch(() => {});
-  return post;
+  fileQueue = upload.catch(() => {});
+  return upload;
 }
 
 async function downloadConversation(conversation, texts) {
@@ -76,25 +83,21 @@ async function downloadConversation(conversation, texts) {
 }
 
 async function handleMessage(msg, sender) {
-  if (msg.type === 'prompt' || msg.type === 'answer' || msg.type === 'canvas') {
+  if (msg.type === 'prompt' || msg.type === 'answer' || msg.type === 'canvas' || msg.type === 'attachments') {
     // canvas は本文なしで、回答の後から届く Canvas のコードだけを同じスレッドへ流す
-    const files = msg.files || [], text = msg.type === 'canvas' ? '' : msg.text;
+    const files = msg.files || [], text = msg.type === 'canvas' || msg.type === 'attachments' ? '' : msg.text;
     if (typeof msg.conversation !== 'string' || !/^[\w-]+$/.test(msg.conversation) || typeof text !== 'string') throw new Error('不正な転送内容です');
     if (!Array.isArray(files) || !files.every((file) => /^[\w.-]{1,100}$/.test(file?.name) && typeof file.content === 'string' && file.content)) throw new Error('不正な添付ファイルです');
-    // 同じ Bot が投稿するので、名前の行を Slack の引用 (左の縦線) にして自分と Gemini を見分けられるようにする。
-    // Slack は日本語に隣接した *太字* を解釈しないので、ゼロ幅スペースで区切る。
     // 添付は名前だけを知らせる (中身は送らない)
     const attached = Array.isArray(msg.attachments) ? msg.attachments.filter((name) => typeof name === 'string' && name).map((name) => name.slice(0, 200)) : [];
     const note = attached.length ? `\n📎 添付: ${escapeSlack(attached.join(', '))}` : '';
-    const email = msg.account?.match(/\(([^()]+@[^()]+)\)/)?.[1];
-    const makeText = (nickname) => {
-      if (msg.type === 'canvas') return '';
-      // 自分の名前はポップアップで設定したニックネームを優先して「ニックネーム (メール)」にし、未設定なら「Google アカウント名 (メール)」のまま
-      const me = nickname ? (email ? `${nickname} (${email})` : nickname) : msg.account || 'unknown';
-      const author = msg.type === 'prompt' ? `🧑‍💻 \u200B*${escapeSlack(me)}*\u200B` : '✨ \u200B*Gemini*\u200B';
-      return `> ${author}\n${escapeSlack(text)}${note}`;
-    };
-    await postToSlack(msg.conversation, makeText, files, msg.type === 'prompt' && msg.newThread === true);
+    const isUser = msg.type === 'prompt' || msg.type === 'attachments';
+    const makeMessage = (nickname) => ({
+      text: msg.type === 'attachments' ? note.trim() : `${escapeSlack(text)}${note}`,
+      username: isUser ? nickname || (msg.account || '').replace(/\s*[（(][^）)]*@[^）)]*[）)]\s*$/, '').trim() || 'ユーザー' : 'Gemini',
+    });
+    const icon = isUser ? ':bust_in_silhouette:' : ':robot_face:';
+    await postToSlack(msg.conversation, makeMessage, files, msg.type === 'prompt' && msg.newThread === true, icon);
     return {};
   }
 
