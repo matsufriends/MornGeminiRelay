@@ -2,7 +2,7 @@
 
 名称：MornGeminiRelay
 言語：日本語
-カテゴリ：仕事効率化
+カテゴリ：仕事効率化 → コミュニケーション
 単一の目的：Gemini の会話を Slack で共有し、質問履歴を保存する。
 
 ## 説明文
@@ -30,9 +30,9 @@ Google・Gemini・Slack の公式製品ではありません。
 - gemini.google.com：質問・回答・会話一覧・表示名を読み取り、利用者の操作で履歴を取得する。
 - *.scf.usercontent.goog：Gemini Canvas プレビューの HTML を取得する。取得した HTML はコード実行せず、Slack 添付として送る。
 - リモートコード：使用しない。拡張の実行コードは ZIP 内に同梱。Gemini のページ自身が実行するコードは拡張コードではない。
-- データの使用：個人を特定できる情報（表示名）、認証情報（Slack Bot Token）、個人的コミュニケーション（会話）、ウェブサイトのコンテンツ（会話・生成コード・Canvas）。実際のフォーム項目と照合して選択する。
+- データの使用：個人を特定できる情報（表示名）、認証情報（Slack Bot Token）、個人的コミュニケーション（会話）、ウェブ履歴（会話一覧のタイトル・URL）、ウェブサイトのコンテンツ（会話・生成コード・Canvas）。実際のフォーム項目と照合して選択する。
 - 売却なし、単一目的以外の使用・転送なし、信用力・融資判断への使用なし。宣誓は最終的に公開者自身が内容を確認する。
-- プライバシーポリシー：https://github.com/matsufriends/MornGeminiRelay/blob/master/privacy.html （GitHub 上の公開文書）。必要に応じて同じ内容を Web ページとしてホスティングする。
+- プライバシーポリシー：https://matsufriends.github.io/MornGeminiRelay/privacy.html
 - サポート：https://github.com/matsufriends/MornGeminiRelay/issues
 
 ## 審査担当者向け手順
